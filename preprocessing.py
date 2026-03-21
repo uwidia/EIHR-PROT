@@ -6,7 +6,7 @@ from urllib3.util.retry import Retry
 from tqdm import tqdm
 from pathlib import Path
 from collections import defaultdict
-from parser import get_protein_info, get_method, get_non_xray_ids
+from parser import get_protein_info, get_method, get_xray_ids
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
@@ -46,7 +46,9 @@ def _get_session():
     return _thread_local.session
 
 #Download a single cif file (AlphaFOld)
-def _download_one_af_structure(protein_id, save_dir, timeout):
+def download_one_af_structure(protein_id, save_dir, timeout):
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
     file_path = save_dir / f"{protein_id}.cif"
 
     if file_path.exists():
@@ -63,7 +65,7 @@ def _download_one_af_structure(protein_id, save_dir, timeout):
             return protein_id, "failed", f"HTTP {r.status_code}"
 
         result = r.json()
-        if not result or ["cifUrl"] not in result[0]:
+        if not result or "cifUrl" not in result[0]:
             return protein_id, "failed", "Invalid JSON response or missing cifUrl for protein"
         cif_url = result[0]["cifUrl"]
         cif_r = session.get(cif_url, timeout = timeout)
@@ -81,7 +83,9 @@ def _download_one_af_structure(protein_id, save_dir, timeout):
 
 
 #Download a single cif file (PDB)
-def _download_one_pdb_structure(pdb_id, save_dir, timeout):
+def download_one_pdb_structure(pdb_id, save_dir, timeout):
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
     file_path = save_dir / f"{pdb_id}.cif"
 
     if file_path.exists():
@@ -109,15 +113,15 @@ def download_multiple_structures_fast(
     save_dir,
     structure_downloader,
     timeout=(5, 20),   
-    max_workers=16,
+    max_workers=8,
     show_failures=True):
     protein_ids = get_protein_info(fasta_path)
 
     # Deduplicate IDs and normalize case
-    protein_ids = sorted({protein["entry_id"].lower() for protein in protein_ids})
-
+    protein_ids = sorted({protein["entry_id"] for protein in protein_ids})
+    save_dir = Path(save_dir)
     
-    save_dir.mkdir(parents=True, exist_ok=True)
+    
 
     downloaded = set()
     skipped = set()
@@ -209,7 +213,7 @@ def count_methods_per_split(pdb_split):
            
     return methods_freq_count, skipped, errors
 
-#Delete any cif files that the method wasn't "X-RAY DIFFRACTION"
+#Delete any cif files that the method wasn't "X-RAY DIFFRACTION" from local storage
 def delete_non_xray_structures(pdb_split): 
     accepted_values = ["train", "val", "test"]
     if pdb_split not in accepted_values:
@@ -261,11 +265,11 @@ def delete_non_xray_structures(pdb_split):
     return deleted, failed, cif_files_not_found, retained
 
 
-
-def filter_xray_struct(valid_xray_ids_file_path, split_fasta_path, output):
+#Filter fasta file to extract x-ray protein-ids and sequences
+def filter_xray_struct(valid_xray_ids_file_path, split_fasta_path, output_filename):
     protein_entries = get_protein_info(split_fasta_path)
     records = []
-    valid_xray_ids = get_non_xray_ids(valid_xray_ids_file_path)
+    valid_xray_ids = get_xray_ids(valid_xray_ids_file_path)
     for protein in protein_entries:
         if protein["entry_id"] in valid_xray_ids:
             record = SeqRecord(Seq(protein["sequence"]), id=protein["full_id"], description = "")
@@ -274,11 +278,31 @@ def filter_xray_struct(valid_xray_ids_file_path, split_fasta_path, output):
     save_dir = Path("./xray_filtered_pdb")
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    save_path = save_dir / f"{output}.fasta"
+    save_path = save_dir / f"{output_filename}.fasta"
 
 
     SeqIO.write(records, save_path, "fasta")
     print(f"Filtering completed successfully. File saved to {save_path}")
     return "completed"
+
+
+#Remove extra characters (nrAF-) in fasta file header. filter_xray_struct has already handled this for pdb files
+def clean_af_fasta_file_header(split_fasta_path, output_filename):
+    protein_entries = get_protein_info(split_fasta_path)
+    records = []
+    for protein in protein_entries:
+        record = SeqRecord(Seq(protein["sequence"]), id=protein["full_id"], description = "")
+        records.append(record)
+    
+    save_dir = Path("./clean_af_fasta_files")
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    save_path = save_dir / f"{output_filename}.fasta"
+
+
+    SeqIO.write(records, save_path, "fasta")
+    print(f"Header cleaning completed successfully. File saved to {save_path}")
+    return "completed"
+
 
     
