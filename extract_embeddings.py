@@ -14,23 +14,22 @@ from esm import FastaBatchedDataset
 
 
 class ESMShardDataset(Dataset):
-    def __init__(self, shard_dir):
+    def __init__(self, shard_dir: str, manifest_path: str):
         self.shard_dir = Path(shard_dir)
+        self.manifest_path = Path(manifest_path)
         self.shard_files = sorted(self.shard_dir.glob("*.pt"))
 
         assert len(self.shard_files) > 0, "No shard files found"
 
         # Build index mapping: global_idx -> (shard_id, local_idx)
         self.index = []
-        self.shard_sizes = []
-
-        for shard_id, shard_file in enumerate(self.shard_files):
-            obj = torch.load(shard_file, map_location="cpu")
-            n = len(obj["representations"])
-            self.shard_sizes.append(n)
-
-            for i in range(n):
-                self.index.append((shard_id, i))
+        with open(manifest_path, "r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                shard_id = int(row["shard_number"])
+                local_seq_idx = int(row["local_seq_idx"])
+                global_seq_idx = int(row["global_seq_idx"])
+                self.index.append((shard_id, local_seq_idx))
 
         # Cache (only one shard in memory at a time)
         self._current_shard_id = None
@@ -39,19 +38,19 @@ class ESMShardDataset(Dataset):
     def __len__(self):
         return len(self.index)
 
-    def _load_shard(self, shard_id):
+    def _load_shard(self, shard_id: int):
         if self._current_shard_id != shard_id:
             shard_file = self.shard_files[shard_id]
             self._current_shard = torch.load(shard_file, map_location="cpu")
             self._current_shard_id = shard_id
 
-    def __getitem__(self, idx):
-        shard_id, local_idx = self.index[idx]
+    def __getitem__(self, idx: int):
+        shard_id, local_seq_idx = self.index[idx]
 
         self._load_shard(shard_id)
 
-        rep = self._current_shard["representations"][local_idx]  # (L, 1280)
-        label = self._current_shard["labels"][local_idx]
+        rep = self._current_shard["representations"][local_seq_idx]  # (L, 1280)
+        label = self._current_shard["labels"][local_seq_idx]
 
         return rep, label
 
@@ -63,7 +62,7 @@ class BufferState:
         self.buffer_seq_lens = []
         self.buffer_trunc_lens = []
     
-    def append(self, rep, label, seq_len, trunc_len):
+    def append(self, rep: torch.Tensor, label: str, seq_len: int, trunc_len: int):
         self.buffer_reps.append(rep)
         self.buffer_labels.append(label)
         self.buffer_seq_lens.append(seq_len)
@@ -107,6 +106,8 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024):
 
 
 def load_model(model_name: str, device: str):
+    if not hasattr(esm.pretrained, model_name):
+        raise ValueError(f"Unknown model: {model_name}")
     loader = getattr(esm.pretrained, model_name)
     model, alphabet = loader()
     model = model.to(device).eval()
@@ -117,7 +118,7 @@ def load_model(model_name: str, device: str):
 
 def flush_shard(shard_buffer: BufferState, output_dir: Path):
     if len(shard_buffer.buffer_reps) == 0:
-        return
+        return #if buffer is empty, return immediately
 
     output_file = output_dir / f"part_{shard_buffer.shard_id:04d}.pt"
 
@@ -125,7 +126,7 @@ def flush_shard(shard_buffer: BufferState, output_dir: Path):
         {
             "representations": shard_buffer.buffer_reps,
             "labels": shard_buffer.buffer_labels,
-            "seq_lengths": shard_buffer.buffer_seq_lens
+            "seq_lengths": shard_buffer.buffer_seq_lens,
             "trunc_lengths": shard_buffer.buffer_trunc_lens
         }, 
         output_file,
@@ -135,6 +136,29 @@ def flush_shard(shard_buffer: BufferState, output_dir: Path):
 
     shard_buffer.next_shard()
     shard_buffer.reset()
+
+def create_manifest(output_dir: Path):
+      manifest_path = output_dir / "manifest.csv"
+      with manifest_path.open("a", newline="") as f_manifest:
+        writer = csv.writer(f_manifest)
+        writer.writerow(
+            [
+                "shard_number",
+                "local_seq_idx",
+                "global_seq_idx",
+                "label",
+                "sequence_length",
+                "was_truncated",
+                "truncated_length",
+            ]
+        )
+    
+def update_manifest( output_dir: Path, manifest_list: list[list]):
+    manifest_path = output_dir / "manifest.csv"
+    with manifest_path.open("a", newline="") as f_manifest:
+        writer = csv.writer(f_manifest)
+        for entry in manifest_list:
+            writer.writerow(entry)
 
 
 def extract_fasta_embeddings(
@@ -148,8 +172,8 @@ def extract_fasta_embeddings(
     use_fp16: bool = True,
     seed: int = 0,
     deterministic: bool = True,
-    device: str | None = None,
-):
+    device: str | None = None
+    ):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -157,6 +181,10 @@ def extract_fasta_embeddings(
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    if device == "cpu" and use_fp16:
+        print("""Warning: You're currently casting to fp16 using a CPU.
+        This action is valid but can be extremely slow and is unsupported by many CPU ops.""")
 
     model, alphabet = load_model(model_name, device=device)
 
@@ -170,94 +198,71 @@ def extract_fasta_embeddings(
         dataset,
         collate_fn=alphabet.get_batch_converter(truncation_seq_length),
         batch_sampler=batches,
-        num_workers=0, 
-        # pin_memory=(device == "cuda"),
+        num_workers=0, #ESMShardDataset._load_shard cache is not thread-safe; keep at 0
+        pin_memory=(device == "cuda"),
     )
 
     print(f"Loaded {len(dataset)} sequences from {fasta_path}")
 
     shard_buffer = BufferState()
 
-
     # CSV file for quick look ups for shard_number or other info across split
-    manifest_path = output_dir / "manifest.csv"
-    with manifest_path.open("w", newline="") as f_manifest:
-        writer = csv.writer(f_manifest)
-        writer.writerow(
-            [
-                "shard_number",
-                "index",
-                "label",
-                "sequence_length",
-                "was_truncated",
-                "truncated_length",
-                "embedding_file",
-            ]
-        )
+    create_manifest(output_dir)
 
-        #Extract embeddings for each batch
-        with torch.inference_mode():
-            for batch_idx, (labels, strs, toks) in enumerate(data_loader):
-                print(
-                    f"Batch {batch_idx+1}/{len(batches)} "
-                    f"({len(labels)} sequences)"
-                )
+    #Extract embeddings for each batch
+    with torch.inference_mode():
+        running_idx = 0
+        local_seq_idx = 0
+        manifest_list = []
+        for batch_idx, (labels, strs, toks) in enumerate(data_loader):
+            print(
+                f"Batch {batch_idx+1}/{len(batches)} "
+                f"({len(labels)} sequences)"
+            )
+            
+            toks = toks.to(device, non_blocking=(device == "cuda"))
+
+            out = model(
+                toks,
+                repr_layers=[repr_layer],
+                return_contacts=False,
+            )
+            reps = out["representations"][repr_layer].to("cpu")
+
+            for i, label in enumerate(labels):
+                global_seq_idx = running_idx + i
+                seq_len = len(strs[i])
+                trunc_len = min(truncation_seq_length, seq_len)
+                # residue tokens are positions 1 : trunc_len + 1. Position 0 is the <CLS> token. 
+                emb = reps[i, 1 : trunc_len + 1].clone()
                 
-                if device == "cuda":
-                    toks = toks.to(device, non_blocking=True)
-                else:
-                    toks = toks.to(device)
+                if use_fp16:
+                    emb = emb.half()
 
-                out = model(
-                    toks,
-                    repr_layers=[repr_layer],
-                    return_contacts=False,
-                )
-                reps = out["representations"][repr_layer].to("cpu")
-
-                for i, label in enumerate(labels):
-                    seq_len = len(strs[i])
-                    trunc_len = min(truncation_seq_length, seq_len)
-
-                    # residue tokens are positions 1 : trunc_len + 1. Position 0 is the <CLS> token. 
-                    emb = reps[i, 1 : trunc_len + 1].clone()
-                    
-                    if use_fp16:
-                        emb = emb.half()
-
-                    shard_buffer.append(emb, label, seq_len, trunc_len)
-                    if len(shard_buffer.buffer_reps) >= shard_size:
-                        flush_shard(shard_buffer, output_dir)
-
-                    seq_idx = sum(len(b) for b in batches[:batch_idx]) + i
-                    was_truncated = 1 if seq_len > truncation_seq_length else 0
-                    file_name = f"{seq_idx:08d}_{label}.pt"
-                    file_path = output_dir / file_name
-
-                    torch.save(
-                        {
-                            "label": label,
-                            "sequence_length": seq_len,
-                            "truncated_length": trunc_len,
-                            "model_name": model_name,
-                            "repr_layer": repr_layer,
-                            "embedding": emb,
-                        },
-                        file_path,
+                shard_buffer.append(emb, label, seq_len, trunc_len)
+                was_truncated = 1 if seq_len > truncation_seq_length else 0
+                
+                manifest_list.append([
+                    shard_buffer.shard_id, local_seq_idx, global_seq_idx, label, seq_len, was_truncated, trunc_len]
                     )
+                local_seq_idx += 1
+                if len(shard_buffer.buffer_reps) >= shard_size:
+                    flush_shard(shard_buffer, output_dir)
+                    local_seq_idx = 0
 
-                    writer.writerow(
-                        [shard_buffer.shard_id,seq_idx, label, seq_len, was_truncated, trunc_len, file_name]
-                    )
+        
+            running_idx += len(labels)
 
-                print(
-                    f"Processed batch {batch_idx + 1}/{len(batches)} "
-                    f"({len(labels)} sequences)"
-                )
+            update_manifest(output_dir,manifest_list)
+            manifest_list = []
+            print(
+                f"Processed batch {batch_idx + 1}/{len(batches)} "
+                f"({len(labels)} sequences)"
+            )
 
-        flush_shard(shard_buffer, output_dir)
-        print("Done!")
-    
+    flush_shard(shard_buffer, output_dir)
+    print("Done!")
+
     metadata = {
         "model_name": model_name,
         "repr_layer": repr_layer,
@@ -321,6 +326,8 @@ def main():
         toks_per_batch=args.toks_per_batch,
         truncation_seq_length=args.truncation_seq_length,
         repr_layer=args.repr_layer,
+        shard_size = args.shard_size,
+        use_fp16 = args.use_fp16,
         seed=args.seed,
         deterministic=args.deterministic,
         device=args.device,
@@ -329,6 +336,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
