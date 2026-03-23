@@ -11,6 +11,7 @@ import torch
 from torch.utils.data import Dataset
 import esm
 from esm import FastaBatchedDataset
+import logging
 
 
 class ESMShardDataset(Dataset):
@@ -112,6 +113,7 @@ def load_model(model_name: str, device: str):
     if not hasattr(esm.pretrained, model_name):
         raise ValueError(f"Unknown model: {model_name}")
     loader = getattr(esm.pretrained, model_name)
+    logger.info(f"Loading model: {model_name}")
     model, alphabet = loader()
     model = model.to(device).eval()
     for p in model.parameters():
@@ -135,7 +137,8 @@ def flush_shard(shard_buffer: BufferState, output_dir: Path):
         output_file,
     )
 
-    print(f"Saved {output_file} ({len(shard_buffer.buffer_reps)} proteins)")
+    logger.info(f"Saved {output_file} ({len(shard_buffer.buffer_reps)} proteins). Flushing shard...")
+    
 
     shard_buffer.next_shard()
     shard_buffer.reset()
@@ -157,6 +160,7 @@ def create_manifest(output_dir: Path):
                     "truncated_length",
                 ]
             )
+        logger.info(f"Manifest created. Saved to {manifest_path}")
     
 def update_manifest( output_dir: Path, manifest_list: list[list]):
     manifest_path = output_dir / "manifest.csv"
@@ -186,9 +190,10 @@ def extract_fasta_embeddings(
 
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info(f"Device set to {device}. {device} will be used to load model")
 
     if device == "cpu" and use_fp16:
-        print("""Warning: You're currently casting to fp16 using a CPU.
+        logger.warning("""Warning: You're currently casting to fp16 using a CPU.
         This action is valid but can be extremely slow and is unsupported by many CPU ops.""")
 
     model, alphabet = load_model(model_name, device=device)
@@ -207,7 +212,7 @@ def extract_fasta_embeddings(
         pin_memory=(device == "cuda"),
     )
 
-    print(f"Loaded {len(dataset)} sequences from {fasta_path}")
+    logger.info(f"Loaded {len(dataset)} sequences from {fasta_path}")
 
     shard_buffer = BufferState()
 
@@ -221,12 +226,13 @@ def extract_fasta_embeddings(
         local_seq_idx = 0
         manifest_list = []
         for batch_idx, (labels, strs, toks) in enumerate(data_loader):
-            print(
+            logger.info(
                 f"Batch {batch_idx+1}/{len(batches)} "
                 f"({len(labels)} sequences)"
             )
             
             toks = toks.to(device, non_blocking=(device == "cuda"))
+        
 
             out = model(
                 toks,
@@ -260,14 +266,15 @@ def extract_fasta_embeddings(
             running_idx += len(labels)
 
             update_manifest(output_dir,manifest_list)
+            logger.info(f"Manifest update for batch {batch_idx} completed successfully")
             manifest_list = []
-            print(
-                f"Processed batch {batch_idx + 1}/{len(batches)} "
+            logger.info(
+                f"Processed batch {batch_idx + 1}/{len(batches)} ",
                 f"({len(labels)} sequences)"
             )
 
     flush_shard(shard_buffer, output_dir)
-    print("Done!")
+    logger.info("Embedding extraction complete!")
 
     metadata = {
         "model_name": model_name,
@@ -289,6 +296,7 @@ def extract_fasta_embeddings(
     (output_dir / "run_metadata.json").write_text(
         json.dumps(metadata, indent=2, sort_keys=True)
     )
+    logger.info(f"run_metadata.json saved to {output_dir}/run_metadata.json")
 
 #Custom collate_fn for dataloader for the ESMShardDataset object. It makes all sequences equal length with the longest sequence by padding
 def collate_fn(batch):
@@ -308,6 +316,8 @@ def collate_fn(batch):
         mask[i, :L] = 1
 
     return padded, mask, labels
+
+logger = logging.getLogger(__name__)
 
 
 def main():
