@@ -17,7 +17,7 @@ class ESMShardDataset(Dataset):
     def __init__(self, shard_dir: str, manifest_path: str):
         self.shard_dir = Path(shard_dir)
         self.manifest_path = Path(manifest_path)
-        self.shard_files = sorted(self.shard_dir.glob("*.pt"))
+        self.shard_files = {f.stem: f for f in sorted(shard_dir.glob("*.pt"))}
 
         assert len(self.shard_files) > 0, "No shard files found"
 
@@ -40,7 +40,10 @@ class ESMShardDataset(Dataset):
 
     def _load_shard(self, shard_id: int):
         if self._current_shard_id != shard_id:
-            shard_file = self.shard_files[shard_id]
+            shard_file_name = f"part_{shard_id:04d}"
+            if shard_file_name not in self.shard_files:
+                raise FileNotFoundError(f"Shard file {shard_file_name}.pt not found — it may have been deleted")
+            shard_file = self.shard_files[shard_file_name]
             self._current_shard = torch.load(shard_file, map_location="cpu")
             self._current_shard_id = shard_id
 
@@ -139,19 +142,21 @@ def flush_shard(shard_buffer: BufferState, output_dir: Path):
 
 def create_manifest(output_dir: Path):
       manifest_path = output_dir / "manifest.csv"
-      with manifest_path.open("a", newline="") as f_manifest:
-        writer = csv.writer(f_manifest)
-        writer.writerow(
-            [
-                "shard_number",
-                "local_seq_idx",
-                "global_seq_idx",
-                "label",
-                "sequence_length",
-                "was_truncated",
-                "truncated_length",
-            ]
-        )
+
+      if not manifest_path.exists():
+        with manifest_path.open("w", newline="") as f_manifest:
+            writer = csv.writer(f_manifest)
+            writer.writerow(
+                [
+                    "shard_number",
+                    "local_seq_idx",
+                    "global_seq_idx",
+                    "label",
+                    "sequence_length",
+                    "was_truncated",
+                    "truncated_length",
+                ]
+            )
     
 def update_manifest( output_dir: Path, manifest_list: list[list]):
     manifest_path = output_dir / "manifest.csv"
@@ -207,6 +212,7 @@ def extract_fasta_embeddings(
     shard_buffer = BufferState()
 
     # CSV file for quick look ups for shard_number or other info across split
+    
     create_manifest(output_dir)
 
     #Extract embeddings for each batch
