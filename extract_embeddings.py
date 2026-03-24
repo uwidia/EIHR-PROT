@@ -12,6 +12,7 @@ from torch.utils.data import Dataset
 import esm
 from esm import FastaBatchedDataset
 import logging
+from utils import setup_logging
 from preprocessing import sha256_file
 from parser import get_dataset_hashes
 
@@ -169,23 +170,12 @@ class BufferState:
         self.buffer_seq_lens = []
         self.buffer_trunc_lens = []
 
-def setup_logging():
-    """
-    Configuration settings for logger
-    """
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        filename= "log_embeddings.log",
-        filemode = "a"
-    )
-
 def set_reproducibility(seed: int = 0, deterministic: bool = True):
     """
     Supports reproducibility by setting seeds and ensuring determinism.
     Args:
-        seed (int): Fixed seed for python, numpy, and pytorch RNG.
-        deterministic (bool): Ensures determinism on similar machine/software stacks
+        seed (int): Controls randomness and supports reproducibility
+        deterministic (bool): Ensures reproducibility on similar machine/software stacks
     """
     random.seed(seed)
     np.random.seed(seed)
@@ -193,8 +183,6 @@ def set_reproducibility(seed: int = 0, deterministic: bool = True):
 
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
-    #Note that determinism isn't guaranteed if your hardware and package versions are different
 
     torch.backends.cudnn.benchmark = False
     if deterministic:
@@ -319,8 +307,8 @@ def extract_fasta_embeddings(
         repr_layer (int): Model layer for extracting sequence representations
         shard_size (int): Max number of sequences per shard
         use_fp16 (bool): Convert sequence representations to float16
-        seed (int): 
-        deterministic (bool):
+        seed (int): Controls randomness and enables reproducibility
+        deterministic (bool): Ensures reproducibility on similar machine/software stacks
         device (str): Device type (i.e cuda or cpu)
     """
 

@@ -11,7 +11,9 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
 import hashlib
+import logging
 
+logger = logging.getLogger(__name__)
 _thread_local = local()
 
 
@@ -151,7 +153,7 @@ def download_multiple_structures_fast(
     structure_downloader,
     timeout: tuple =(5, 20),   
     max_workers: int =8,
-    show_failures: bool =True):
+    log_failures: bool =True):
 
      """
     Download multiple protein structure CIF files in parallel.
@@ -166,7 +168,7 @@ def download_multiple_structures_fast(
             Must return (protein_id, status, error_message).
         timeout (tuple, optional): Request timeout (connect, read).
         max_workers (int, optional): Number of parallel download threads.
-        show_failures (bool, optional): Whether to print sample failures.
+        log_failures (bool, optional): Whether to save sample failures in log.
 
     Returns:
         dict: Summary with keys:
@@ -183,7 +185,6 @@ def download_multiple_structures_fast(
     save_dir = Path(save_dir)
     
     
-
     downloaded = set()
     skipped = set()
     failed = set()
@@ -198,9 +199,7 @@ def download_multiple_structures_fast(
         else:
             to_download.append(protein_id)
 
-    print(f"Total unique structures: {len(protein_ids)}")
-    print(f"Already present: {len(skipped)}")
-    print(f"Need to download: {len(to_download)}")
+    logger.info(f"Total unique structures: {len(protein_ids)} | Already present: {len(skipped)} | Need to download: {len(to_download)}")
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
@@ -217,15 +216,11 @@ def download_multiple_structures_fast(
                 failed.add(protein_id)
                 failure_reasons[protein_id] = err
 
-    print(f"\nFinished.")
-    print(f"Downloaded: {len(downloaded)}")
-    print(f"Skipped existing: {len(skipped)}")
-    print(f"Failed: {len(failed)}")
+    logger.info(f"\nDownloaded: {len(downloaded)} | Skipped existing: {len(skipped)} | Failed: {len(failed)} ")
 
-    if failed and show_failures:
-        print("\nSample failures:")
-        for protein_id in list(sorted(failed))[:20]:
-            print(f"  {protein_id}: {failure_reasons[protein_id]}")
+    if failed and log_failures:
+        for protein_id in list(sorted(failed))[:20]: #logs first 20 failures only
+            logger.error(f"{protein_id}: {failure_reasons[protein_id]}")
 
     return {
         "downloaded": downloaded,
@@ -385,11 +380,8 @@ def delete_non_xray_structures(pdb_split: str):
     with open(output_dir, "w", encoding= "utf-8") as file:
         for retained_id in retained:
             file.write(f"{retained_id}\n")
-            
-    print(f"{len(deleted)} files were successfully deleted.")
-    print(f"{len(cif_files_not_found)} cif files weren't found in the pdb {pdb_split} directory")
-    print(f"{len(failed)} cif files couldn't be processed")
-    print(f"{len(retained)} xray-derived cif files left in the directory.Ids saved to {output_dir}")
+    logger.info(f"""Deleted files: {len(deleted)} | Missing Cif files: {len(cif_files_not_found)} 
+    | Failed to process: {len(failed)} | Retained files: {len(retained)} | Output Directory: {output_dir}""")
 
     return deleted, failed, cif_files_not_found, retained
 
@@ -425,7 +417,7 @@ def filter_xray_struct(valid_xray_ids_file_path: Path, split_fasta_path: Path, o
 
     SeqIO.write(records, save_path, "fasta")
     save_hash(save_path)
-    print(f"Filtering completed successfully. File saved to {save_path}")
+    logger.info(f"Filtering completed successfully. File saved to {save_path}")
     return "completed"
 
 
@@ -457,12 +449,14 @@ def clean_af_fasta_file_header(split_fasta_path: Path, output_filename: str):
 
     SeqIO.write(records, save_path, "fasta")
     save_hash(save_path)
-    print(f"Header cleaning completed successfully. File saved to {save_path}")
+    logger.info(f"Header cleaning completed successfully. File saved to {save_path}")
     return "completed"
 
 
     """
 Suggestions for later:
+- USE CONFIG FILES OR ENV VARS TO REPLACE HARDCODED STUFF
+- Add unit testing
 - Handle partial downloads
 - Set up download resumption logic
 - Manage broken or damaged files???
