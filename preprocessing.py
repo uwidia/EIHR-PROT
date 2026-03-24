@@ -10,11 +10,18 @@ from parser import get_protein_info, get_method, get_xray_ids
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
+import hashlib
 
 _thread_local = local()
 
 
 def _make_session():
+     """
+    Create a configured requests session with retry and connection pooling.
+
+    Returns:
+        requests.Session: Session with retry policy and default headers.
+    """
     session = requests.Session()
 
     retry = Retry(
@@ -41,12 +48,30 @@ def _make_session():
 
 
 def _get_session():
+    """
+    Get a thread-local HTTP session, creating one if needed.
+
+    Returns:
+        requests.Session: Per-thread cached session instance.
+    """
     if not hasattr(_thread_local, "session"):
         _thread_local.session = _make_session()
     return _thread_local.session
 
 #Download a single cif file (AlphaFOld)
-def download_one_af_structure(protein_id, save_dir, timeout):
+def download_one_af_structure(protein_id: str, save_dir: str, timeout: tuple):
+    """
+    Download a protein structure CIF file from AlphaFold.
+
+    Args:
+        protein_id (str): UniProt protein identifier.
+        save_dir (str): Directory to save the CIF file.
+        timeout (tuple): Request timeout (connect, read).
+
+    Returns:
+        tuple: (protein_id, status, error_message)
+            status ∈ {"downloaded", "skipped", "failed"}.
+    """
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     file_path = save_dir / f"{protein_id}.cif"
@@ -83,7 +108,19 @@ def download_one_af_structure(protein_id, save_dir, timeout):
 
 
 #Download a single cif file (PDB)
-def download_one_pdb_structure(pdb_id, save_dir, timeout):
+def download_one_pdb_structure(pdb_id: str, save_dir: str, timeout: tuple):
+     """
+    Download a protein structure CIF file from the RCSB PDB.
+
+    Args:
+        pdb_id (str): PDB identifier.
+        save_dir (str): Directory to save the CIF file.
+        timeout (tuple): Request timeout (connect, read).
+
+    Returns:
+        tuple: (pdb_id, status, error_message)
+            status ∈ {"downloaded", "skipped", "failed"}.
+    """
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
     file_path = save_dir / f"{pdb_id}.cif"
@@ -109,12 +146,36 @@ def download_one_pdb_structure(pdb_id, save_dir, timeout):
 
 #Download Multiple Cif Files Using Protein IDs (for PDBset and AFSet)
 def download_multiple_structures_fast(
-    fasta_path,
-    save_dir,
+    fasta_path: Path,
+    save_dir: str,
     structure_downloader,
-    timeout=(5, 20),   
-    max_workers=8,
-    show_failures=True):
+    timeout: tuple =(5, 20),   
+    max_workers: int =8,
+    show_failures: bool =True):
+
+     """
+    Download multiple protein structure CIF files in parallel.
+
+    Reads protein IDs from a FASTA file, skips already-downloaded files,
+    and uses a provided downloader function to fetch missing structures.
+
+    Args:
+        fasta_path (Path): Path to FASTA file containing protein entries.
+        save_dir (str): Directory to save downloaded CIF files.
+        structure_downloader (callable): Function to download a single structure.
+            Must return (protein_id, status, error_message).
+        timeout (tuple, optional): Request timeout (connect, read).
+        max_workers (int, optional): Number of parallel download threads.
+        show_failures (bool, optional): Whether to print sample failures.
+
+    Returns:
+        dict: Summary with keys:
+            - "downloaded": set of successfully downloaded IDs
+            - "skipped": set of already existing IDs
+            - "failed": set of failed IDs
+            - "failure_reasons": dict mapping ID → error message
+    """
+
     protein_ids = get_protein_info(fasta_path)
 
     # Deduplicate IDs and normalize case
@@ -175,7 +236,26 @@ def download_multiple_structures_fast(
 
 
 #Count the number of methods for each protein entry in a split (i.e. train, test, or val)
-def count_methods_per_split(pdb_split):
+def count_methods_per_split(pdb_split: str):
+    """
+    Count structure determination methods for a dataset split.
+
+    Iterates over protein entries, reads corresponding CIF files,
+    and aggregates method frequencies. Uses caching to avoid
+    reprocessing duplicate entries.
+
+    Args:
+        pdb_split (str): Dataset split name ("train", "val", or "test").
+
+    Returns:
+        tuple:
+            - dict: method → count
+            - set: skipped protein IDs (missing CIF files)
+            - dict: entry_id → error message for failed parses
+
+    Raises:
+        ValueError: If pdb_split is not one of {"train", "val", "test"}.
+    """
     cached_method_info = {}
     skipped = set()
     errors = {}
@@ -213,8 +293,57 @@ def count_methods_per_split(pdb_split):
            
     return methods_freq_count, skipped, errors
 
-#Delete any cif files that the method wasn't "X-RAY DIFFRACTION" from local storage
-def delete_non_xray_structures(pdb_split): 
+def sha256_file(path: Path, chunk_size: int = 1024 * 1024):
+    """
+    Compute SHA-256 hash of a file.
+
+    Args:
+        path (Path): File to hash.
+        chunk_size (int, optional): Size of chunks to read.
+
+    Returns:
+        str: Hex digest of the file.
+    """
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+def save_hash(fasta_path: Path):
+     """
+    Compute and append the SHA-256 hash of a file to 'hashlist.txt'.
+
+    Args:
+        fasta_path (Path): File to hash.
+    """
+    file_hash = sha256_file(fasta_path)
+    with open("hashlist.txt", "a") as file:
+        file.write(f"{file_hash}\n")
+
+def delete_non_xray_structures(pdb_split: str): 
+    """
+    Remove non–X-ray diffraction CIF files for a dataset split.
+
+    Iterates over protein IDs, deletes CIF files whose method is not
+    "X-RAY DIFFRACTION", and records outcomes.
+
+    Args:
+        pdb_split (str): Dataset split ("train", "val", or "test").
+
+    Returns:
+        tuple:
+            - set: deleted IDs
+            - dict: ID → error message for failures
+            - set: IDs with missing CIF files
+            - set: retained (X-ray) IDs
+
+    Raises:
+        ValueError: If pdb_split is invalid.
+    """
     accepted_values = ["train", "val", "test"]
     if pdb_split not in accepted_values:
         raise ValueError("pdb_split should be one of: train, val, or test")
@@ -266,7 +395,20 @@ def delete_non_xray_structures(pdb_split):
 
 
 #Filter fasta file to extract x-ray protein-ids and sequences
-def filter_xray_struct(valid_xray_ids_file_path, split_fasta_path, output_filename):
+def filter_xray_struct(valid_xray_ids_file_path: Path, split_fasta_path: Path, output_filename: str):
+    """
+    Filter FASTA entries to include only proteins with valid X-ray structures.
+
+    Writes a new FASTA file and stores its hash.
+
+    Args:
+        valid_xray_ids_file_path (Path): File containing valid X-ray IDs.
+        split_fasta_path (Path): Input FASTA file.
+        output_filename (str): Name of output FASTA file (without extension).
+
+    Returns:
+        str: "completed" on success.
+    """
     protein_entries = get_protein_info(split_fasta_path)
     records = []
     valid_xray_ids = get_xray_ids(valid_xray_ids_file_path)
@@ -282,12 +424,25 @@ def filter_xray_struct(valid_xray_ids_file_path, split_fasta_path, output_filena
 
 
     SeqIO.write(records, save_path, "fasta")
+    save_hash(save_path)
     print(f"Filtering completed successfully. File saved to {save_path}")
     return "completed"
 
 
 #Remove extra characters (nrAF-) in fasta file header. filter_xray_struct has already handled this for pdb files
-def clean_af_fasta_file_header(split_fasta_path, output_filename):
+def clean_af_fasta_file_header(split_fasta_path: Path, output_filename: str):
+    """
+    Clean FASTA headers and rewrite sequences to a new file.
+
+    Removes unwanted prefixes and preserves sequence data.
+
+    Args:
+        split_fasta_path (Path): Input FASTA file.
+        output_filename (str): Name of output FASTA file (without extension).
+
+    Returns:
+        str: "completed" on success.
+    """
     protein_entries = get_protein_info(split_fasta_path)
     records = []
     for protein in protein_entries:
@@ -301,8 +456,15 @@ def clean_af_fasta_file_header(split_fasta_path, output_filename):
 
 
     SeqIO.write(records, save_path, "fasta")
+    save_hash(save_path)
     print(f"Header cleaning completed successfully. File saved to {save_path}")
     return "completed"
 
 
-    
+    """
+Suggestions for later:
+- Handle partial downloads
+- Set up download resumption logic
+- Manage broken or damaged files???
+- standardize naming + return with dataclasses instead of tuples/dicts
+    """

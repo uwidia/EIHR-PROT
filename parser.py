@@ -1,6 +1,12 @@
 import gemmi
+from pathlib import Path
 
-def get_protein_info(file_path):
+def get_protein_info(file_path: Path):
+    """
+    Retrieves protein information - ids and sequence - for each protein in a fasta file.
+    Return:
+        List of dictionaries with id and sequence information per protein entry
+    """
     with open(file_path, "r") as file:
         fasta_file = file.read()
 
@@ -29,7 +35,14 @@ def get_protein_info(file_path):
     return protein_info
 
 #Parse cif file and retreive method
-def get_method(cif_path):
+def get_method(cif_path: Path):
+    """
+    Identify method used for protein structure determination in cif file
+    Args:
+        cif_path(Path): Path to protein structure (.cif) file
+    Returns:
+        String with single method or multiple methods concatenated with ";"
+    """
     doc = gemmi.cif.read(str(cif_path))
     block = doc.sole_block()
     methods = block.find_values("_exptl.method")
@@ -38,9 +51,26 @@ def get_method(cif_path):
     return method
 
 #Parse retained_ids for xray-derived pdb structures
-def get_non_xray_ids(file_path):
+def get_xray_ids(file_path: Path):
+    """
+    Creates set containing xray-derived-protein-structure ids from text file.
+    """
     with open(file_path, "r", encoding = "utf-8") as file:
-        deleted_ids_txt = file.read()
-        non_xray_id = deleted_ids_txt.splitlines()
-        non_xray_id = set(non_xray_id)
-    return non_xray_id
+        retained_ids_txt = file.read()
+        xray_ids = retained_ids_txt.splitlines()
+        xray_ids = set(xray_ids)
+    return xray_ids
+
+def get_dataset_hashes(file_path: Path):
+    """
+    Retrieves hashes from text file with valid hashes for preprocessed datasets.
+    Returns:
+        List containing valid hashes
+    """
+    with open(file_path, "r", encoding="utf-8") as file:
+        if not file_path.exists():
+            logger.warning(f"Hash file not found: {file_path}")
+            return []
+        hashlist_txt = file.read()
+        hashlist = [line.strip() for line in file]
+    return hashlist
