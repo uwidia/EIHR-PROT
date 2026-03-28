@@ -7,6 +7,10 @@ from torch_geometric.data import Data
 from torch_geometric.nn import radius_graph
 from multiprocessing import Pool
 
+import torch
+from pathlib import Path
+from tqdm import tqdm
+
 #Global Aligner
 ALIGNER = PairwiseAligner()
 ALIGNER.mode = "global"
@@ -211,76 +215,214 @@ def build_radius_graph(coords, has_structure, cutoff=10.0):
     return edge_index, edge_attr
 
 
-#Pipeline entry
-def process_structure(cif_path, fasta_seq, cutoff=10.0):
-    """End-to-end processing into PyG Data object."""
+def extract_chain_id(label: str):
+    """
+    Extract chain ID from label.
+    Example: 15Y3-A → A
+    """
+    if "-" in label:
+        return label.split("-")[-1]
+    return None
 
-    data = parse_structure(cif_path, fasta_seq)
-    if data is None:
-        return None
 
-    edge_index, edge_attr = build_radius_graph(
-        data["coords"], data["has_structure"], cutoff
+def compute_global_stats(has_structure, confidence):
+    """
+    Compute global structural statistics.
+    """
+    mask = has_structure.bool()
+
+    if mask.sum() == 0:
+        return 0.0, 0.0, 0.0
+
+    conf_valid = confidence[mask]
+
+    coverage = float(mask.float().mean())
+    mean_conf = float(conf_valid.mean())
+    max_conf = float(conf_valid.max())
+
+    return coverage, mean_conf, max_conf
+
+
+def compute_edge_weights(edge_index, confidence):
+    """
+    Compute edge weights:
+        w_ij = c_i * c_j
+    """
+    row, col = edge_index
+    return confidence[row] * confidence[col]
+
+
+def construct_graph(data, edge_index, edge_attr):
+    """
+    Construct final graph dictionary with all required metadata.
+    """
+
+    coords = data["coords"]
+    has_structure = data["has_structure"]
+    confidence = data["confidence"]
+
+    # ---- Global stats ----
+    coverage, mean_conf, max_conf = compute_global_stats(
+        has_structure, confidence
     )
 
-    if edge_index is None:
-        return None
+    # ---- Edge weights ----
+    edge_weight = compute_edge_weights(edge_index, confidence)
 
-    pyg_data = Data(
-        x=data["coords"],
-        edge_index=edge_index,
-        edge_attr=edge_attr
-    )
+    graph = {
+        # Core graph
+        "coords": coords,                         # (L, 3)
+        "edge_index": edge_index,                 # (2, E)
+        "edge_attr": edge_attr,                   # (E, 4)
+        "edge_weight": edge_weight,               # (E,)
 
-    pyg_data.has_structure = data["has_structure"]
-    pyg_data.confidence = data["confidence"]
-    pyg_data.has_confidence = data["has_confidence"]
-    pyg_data.resolution = data["resolution"]
-    pyg_data.is_alphafold = data["is_alphafold"]
+        # Node-level metadata
+        "has_structure": has_structure,           # (L,)
+        "confidence": confidence,                 # (L,)
 
-    return pyg_data
+        # Global metadata
+        "coverage": coverage,                     # float
+        "mean_confidence": mean_conf,             # float
+        "max_confidence": max_conf,               # float
 
+        # Source info
+        "is_alphafold": data["is_alphafold"],     # bool
+        "is_experimental": not data["is_alphafold"],
 
-#Batch Processing
-def process_many(inputs, num_workers=8, cutoff=10.0):
-    """Parallel processing of multiple structures."""
+        # Experimental detail
+        "resolution": data["resolution"],         # float or None
+    }
 
-    args = [(cif, fasta, cutoff) for cif, fasta in inputs]
-
-    with Pool(num_workers) as p:
-        results = p.starmap(process_structure, args)
-
-    return [r for r in results if r is not None]
-
-
-#I need a function to extract the coords
-
-# def build_edges(coords, cutoff=10.0):
-#     # coords: (L, 3)
-#     dists = torch.cdist(coords, coords)  # (L, L)
-#     edge_index = (dists < cutoff).nonzero(as_tuple=False).t()
-#     return edge_index
+    return graph
 
 
-"""
-{
-    "representations": [...],   # (L,1280) fp16
-    "coords": [...],            # (L,3) fp32
-    "edge_index": [...],        # (2,E)
-    "confidence": [...],        # (L,) fp32
-    "has_confidence": [...],    # (L,) bool
-    "has_structure": [...],     # (L,) bool
-    "labels": [...],
-    "method": [...],            # string or int
-}
+def save_shard(shard_dict, shard_id, output_dir):
+    """
+    Save a single shard to disk.
+    """
+    path = Path(output_dir) / f"graph_shard_{shard_id:04d}.pt"
+    torch.save(shard_dict, path)
 
-- Consider using resolution as a global_confidence_score. 
-This will change the definition of confidence_value:
-global_conf = f(resolution)
 
-final_conf_i = global_conf * local_conf_i
+def build_graph_shards(
+    dataset,                  # List[Tuple[label, cif_path, fasta_seq]]
+    output_dir,
+    shard_size=1000,
+    cutoff=10.0
+):
+    """
+    Build structural graph shards.
 
-Example:
+    Each shard:
+        Dict[label → graph_dict]
 
-global_conf = 1 / (1 + (resolution - 2.5))
-"""
+    Also produces:
+        graph_index.pt → Dict[label → shard_id]
+
+    Design guarantees:
+    - deterministic shard assignment (sorted labels)
+    - no failed entries included
+    - memory-efficient (one shard at a time)
+    """
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- Deterministic ordering ----
+    dataset = sorted(dataset, key=lambda x: x[0])
+
+    current_shard = {}
+    current_shard_id = 0
+    label_to_shard = {}
+
+    total_written = 0
+    failed_parse = 0
+    failed_graph = 0
+
+    for label, cif_path, fasta_seq in tqdm(dataset):
+
+        chain_id = extract_chain_id(label)
+
+        # ---- Parse structure ----
+        data = parse_structure(
+            Path(cif_path),
+            fasta_seq,
+            chain_id=chain_id
+        )
+
+        if data is None:
+            failed_parse += 1
+            continue
+
+        # ---- Build graph ----
+        edge_index, edge_attr = build_radius_graph(
+            data["coords"],
+            data["has_structure"],
+            cutoff=cutoff
+        )
+
+        if edge_index is None:
+            failed_graph += 1
+            continue
+
+        # ---- Construct graph ----
+        graph = construct_graph(data, edge_index, edge_attr)
+
+        # ---- Add to shard ----
+        current_shard[label] = graph
+        label_to_shard[label] = current_shard_id
+        total_written += 1
+
+        # ---- Save shard if full ----
+        if len(current_shard) >= shard_size:
+            save_shard(current_shard, current_shard_id, output_dir)
+            current_shard = {}
+            current_shard_id += 1
+
+    # ---- Save final shard ----
+    if len(current_shard) > 0:
+        save_shard(current_shard, current_shard_id, output_dir)
+
+    # ---- Save index ----
+    index_path = output_dir / "graph_index.pt"
+    torch.save(label_to_shard, index_path)
+
+    # ---- Sanity check ----
+    assert len(label_to_shard) == total_written, \
+        "Mismatch between index and written graphs"
+
+    print("\nFinished:")
+    print(f"  Total graphs: {total_written}")
+    print(f"  Failed (parse): {failed_parse}")
+    print(f"  Failed (graph): {failed_graph}")
+    print(f"  Total shards: {current_shard_id + 1}")
+
+
+def validate_random_samples(output_dir, num_samples=10):
+    """
+    Validate that shard lookup works correctly.
+    """
+
+    import random
+
+    output_dir = Path(output_dir)
+    index = torch.load(output_dir / "graph_index.pt")
+
+    labels = list(index.keys())
+    samples = random.sample(labels, min(num_samples, len(labels)))
+
+    for label in samples:
+        shard_id = index[label]
+        shard_path = output_dir / f"graph_shard_{shard_id:04d}.pt"
+
+        shard = torch.load(shard_path)
+
+        assert label in shard, f"{label} missing in shard {shard_id}"
+
+    print(f"Validation passed for {len(samples)} samples.")
+
+
+
+
+
+
