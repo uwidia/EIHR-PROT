@@ -6,7 +6,7 @@ from Bio.Align import PairwiseAligner
 from torch_geometric.data import Data
 from torch_geometric.nn import radius_graph
 from multiprocessing import Pool
-
+from parser import get_protein_info
 import torch
 from pathlib import Path
 from tqdm import tqdm
@@ -36,7 +36,7 @@ def three_to_one(resnames):
 
 #Alignment
 def fast_subsequence_match(long_seq, short_seq):
-    """Fast exact subsequence match."""
+    """Quick check to find an EXACT subsequence match in a longer sequence."""
     start = long_seq.find(short_seq)
     if start == -1:
         return None
@@ -58,6 +58,8 @@ def pairwise_aligner_map(long_seq, short_seq):
             mapping[s_start + i] = l_start + i
 
     return mapping if mapping else None
+
+
 
 
 def align_sequences(long_seq, short_seq):
@@ -422,7 +424,44 @@ def validate_random_samples(output_dir, num_samples=10):
     print(f"Validation passed for {len(samples)} samples.")
 
 
+if __name__ == "__main__":
+    fasta_path = Path("clean_af_fasta_files/cleaned_af_test.fasta")
+    protein_info = get_protein_info(fasta_path)
+    for protein in tqdm(protein_info[:2], desc = "experiment running"):
+        protein_id = protein["entry_id"]
+        sequence = protein["sequence"]
+        chain_id = protein["chain"]
+        path_to_cif_file = Path(f"structures/af/af_test/{protein_id}.cif")
+        structure_info = parse_structure(path_to_cif_file, sequence, chain_id)
+        print(structure_info)
+        # edge_idx, edge_attr = build_radius_graph(structure_info["coords"], structure_info["has_structure"])
+        # coverage, mean_conf, max_conf = compute_global_stats(structure_info["has_structure"],structure_info["confidence"])
 
 
 
+"""
+Current flow:
+cif → shard builder → disk
+training → load shard → dict → convert (if needed) → model
 
+{
+    "representations": [...],   # (L,1280) fp16
+    "coords": [...],            # (L,3) fp32
+    "edge_index": [...],        # (2,E)
+    "confidence": [...],        # (L,) fp32
+    "has_confidence": [...],    # (L,) bool
+    "has_structure": [...],     # (L,) bool
+    "labels": [...],
+    "method": [...],            # string or int
+}
+
+- Consider using resolution as a global_confidence_score. DONE ALREADY✅✅ (confirm sha. AI can be silly. Lmao)
+This will change the definition of confidence_value:
+global_conf = f(resolution)
+
+final_conf_i = global_conf * local_conf_i
+
+Example:
+
+global_conf = 1 / (1 + (resolution - 2.5))
+"""
