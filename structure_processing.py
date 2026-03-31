@@ -10,17 +10,19 @@ from parser import get_protein_info
 import torch
 from pathlib import Path
 from tqdm import tqdm
+from parser import get_protein_info
+import gemmi
+import numpy as np
+import torch
+from pathlib import Path
+import logging
 
-#Global Aligner
-ALIGNER = PairwiseAligner()
-ALIGNER.mode = "global"
-ALIGNER.match_score = 2
-ALIGNER.mismatch_score = -1
-ALIGNER.open_gap_score = -5
-ALIGNER.extend_gap_score = -0.5
+logger = logging.getLogger(__name__)
 
+# =========================================================
+# 🧬 Residue Mapping
+# =========================================================
 
-#Residue Mapping
 AA_MAP = {
     "ALA":"A","ARG":"R","ASN":"N","ASP":"D","CYS":"C",
     "GLN":"Q","GLU":"E","GLY":"G","HIS":"H","ILE":"I",
@@ -28,151 +30,197 @@ AA_MAP = {
     "SER":"S","THR":"T","TRP":"W","TYR":"Y","VAL":"V"
 }
 
-
-def three_to_one(resnames):
-    """Convert 3-letter residue names to 1-letter sequence."""
-    return "".join([AA_MAP.get(r, "X") for r in resnames])
+def three_to_one_array(resnames):
+    return np.array([AA_MAP.get(r, "X") for r in resnames])
 
 
-#Alignment
-def fast_subsequence_match(long_seq, short_seq):
-    """Quick check to find an EXACT subsequence match in a longer sequence."""
-    start = long_seq.find(short_seq)
-    if start == -1:
-        return None
-    return {i: start + i for i in range(len(short_seq))}
+# =========================================================
+# 🧬 STRUCTURE PARSER (FINAL)
+# =========================================================
 
-
-def pairwise_aligner_map(long_seq, short_seq):
-    """Fallback alignment using Biopython PairwiseAligner."""
-    alignments = ALIGNER.align(long_seq, short_seq)
-    if len(alignments) == 0:
-        return None
-
-    aln = alignments[0]
-    long_blocks, short_blocks = aln.aligned
-
-    mapping = {}
-    for (l_start, l_end), (s_start, s_end) in zip(long_blocks, short_blocks):
-        for i in range(s_end - s_start):
-            mapping[s_start + i] = l_start + i
-
-    return mapping if mapping else None
-
-
-
-
-def align_sequences(long_seq, short_seq):
-    """Hybrid alignment: fast exact match → global alignment fallback."""
-    match = fast_subsequence_match(long_seq, short_seq)
-    if match is not None:
-        return match
-    return pairwise_aligner_map(long_seq, short_seq)
-
-
-#Structure parser
-def parse_structure(cif_path: Path, fasta_seq: str, chain_id: str = None, eps: float = 1e-6):
-    """
-    Parse mmCIF file and align structure to full FASTA sequence.
-
-    Confidence handling:
-    - AlphaFold: pLDDT / 100
-    - PDB: occupancy * sigmoid(-zscore(B-factor)) using MAD normalization
-      + optional global resolution scaling
-    """
+def parse_structure(cif_path: Path, fasta_seq: str, chain_id: str):
     try:
         doc = gemmi.cif.read_file(str(cif_path))
         block = doc.sole_block()
 
-        atom_site = block.find_loop("_atom_site.")
+        table = block.find([
+            "_atom_site.label_atom_id",
+            "_atom_site.label_seq_id",
+            "_atom_site.label_comp_id",
+            "_atom_site.auth_asym_id",
+            "_atom_site.Cartn_x",
+            "_atom_site.Cartn_y",
+            "_atom_site.Cartn_z",
+            "_atom_site.B_iso_or_equiv",
+            "_atom_site.occupancy"
+        ])
 
-        atom_name = np.array(atom_site.get_column("_atom_site.label_atom_id"))
-        res_id = np.array(atom_site.get_column("_atom_site.label_seq_id"), dtype=np.int32)
-        res_name = np.array(atom_site.get_column("_atom_site.label_comp_id"))
-        chain = np.array(atom_site.get_column("_atom_site.auth_asym_id"))
+        if table is None or len(table) == 0:
+            logger.error(f"Table returned none for {cif_path.stem}")
+            return None
 
-        x = np.array(atom_site.get_column("_atom_site.Cartn_x"), dtype=np.float32)
-        y = np.array(atom_site.get_column("_atom_site.Cartn_y"), dtype=np.float32)
-        z = np.array(atom_site.get_column("_atom_site.Cartn_z"), dtype=np.float32)
+        # =====================================================
+        # Extract columns (vectorized)
+        # =====================================================
+        atom_name = np.array(table.column(0))
+        raw_seq_id = np.array(table.column(1))
 
-        coords = np.stack([x, y, z], axis=1)
+        # Convert safely: replace invalid entries with -1
+        def safe_int(x):
+            try:
+                return int(x)
+            except:
+                return -1  # mark invalid
 
-        bfactor = np.array(atom_site.get_column("_atom_site.B_iso_or_equiv"), dtype=np.float32)
-        occupancy = np.array(atom_site.get_column("_atom_site.occupancy"), dtype=np.float32)
+        label_seq_id = np.array([safe_int(x) for x in raw_seq_id], dtype=np.int32)
+        res_name = np.array(table.column(2))
+        chain = np.array(table.column(3))
 
-        # detect method
+        x = np.array(table.column(4), dtype=np.float32)
+        y = np.array(table.column(5), dtype=np.float32)
+        z = np.array(table.column(6), dtype=np.float32)
+        coords_all = np.stack([x, y, z], axis=1)
+
+        bfactor = np.array(table.column(7), dtype=np.float32)
+        occupancy = np.array(table.column(8), dtype=np.float32)
+
+        # =====================================================
+        # Metadata
+        # =====================================================
         methods = block.find_values("_exptl.method")
         method = "; ".join(methods) if methods else None
         is_alphafold = (method is None)
 
-        # resolution (PDB only)
         resolution = block.find_value("_refine.ls_d_res_high")
         resolution = float(resolution) if resolution not in [None, "?", "."] else None
 
-        mask_chain = (chain == chain_id) if chain_id else np.ones(len(chain), dtype=bool)
+        # =====================================================
+        # 🔥 Chain filtering (ONLY for PDB)
+        # =====================================================
+        if not is_alphafold:
+            mask_chain = (chain == chain_id)
+            if mask_chain.sum() == 0:
+                return None
 
-        ca_mask = (atom_name == "CA") & mask_chain
+            atom_name = atom_name[mask_chain]
+            label_seq_id = label_seq_id[mask_chain]
+            res_name = res_name[mask_chain]
+            coords_all = coords_all[mask_chain]
+            bfactor = bfactor[mask_chain]
+            occupancy = occupancy[mask_chain]
+
+        # =====================================================
+        # 🔥 Select CA atoms only
+        # =====================================================
+        ca_mask = (atom_name == "CA")
+
         if ca_mask.sum() == 0:
+            logger.error(f"Ca_mask sum returned 0 for {cif_path.stem}")
             return None
 
-        res_ids = res_id[ca_mask]
-        res_names = res_name[ca_mask]
-        coords = coords[ca_mask]
-        bfactor = bfactor[ca_mask]
-        occupancy = occupancy[ca_mask]
+        atom_name = atom_name[ca_mask]
+        label_seq_id = label_seq_id[ca_mask]
+        res_name = res_name[ca_mask]
+        coords = coords_all[ca_mask]
+        b_vals = bfactor[ca_mask]
+        occ_vals = occupancy[ca_mask]
 
-        order = np.argsort(res_ids)
-        res_ids = res_ids[order]
-        res_names = res_names[order]
-        coords = coords[order]
-        bfactor = bfactor[order]
-        occupancy = occupancy[order]
-
-        cif_seq = three_to_one(res_names)
-        mapping = align_sequences(cif_seq, fasta_seq)
-        if mapping is None:
-            return None
-
+        # =====================================================
+        # 🧬 Build CIF sequence (CA-based)
+        # =====================================================
+        cif_seq = "".join(three_to_one_array(res_name))
         L = len(fasta_seq)
 
+        # =====================================================
+        # 🔥 AlphaFold mapping via substring match
+        # =====================================================
+        if is_alphafold:
+
+            matches = [
+                i for i in range(len(cif_seq))
+                if cif_seq.startswith(fasta_seq, i)
+            ]
+
+            if len(matches) != 1:
+                logger.error(f"len(matches) returned none for {cif_path.stem}")
+                return None
+
+            start = matches[0]
+
+            idx = (label_seq_id - 1) - start
+
+        else:
+            # PDB mapping
+            idx = label_seq_id - 1
+
+        # =====================================================
+        # Bounds check
+        # =====================================================
+        valid = (idx >= 0) & (idx < L)
+
+        if valid.sum() == 0:
+            return None
+
+        idx = idx[valid]
+        coords = coords[valid]
+        b_vals = b_vals[valid]
+        occ_vals = occ_vals[valid]
+
+        # =====================================================
+        # 🧬 Build full-length arrays
+        # =====================================================
         full_coords = np.zeros((L, 3), dtype=np.float32)
         full_b = np.zeros(L, dtype=np.float32)
         full_occ = np.zeros(L, dtype=np.float32)
         has_structure = np.zeros(L, dtype=bool)
 
-        for fasta_idx, cif_idx in mapping.items():
-            if cif_idx < len(coords):
-                full_coords[fasta_idx] = coords[cif_idx]
-                full_b[fasta_idx] = bfactor[cif_idx]
-                full_occ[fasta_idx] = occupancy[cif_idx]
-                has_structure[fasta_idx] = True
+        full_coords[idx] = coords
+        full_b[idx] = b_vals
+        full_occ[idx] = occ_vals
+        has_structure[idx] = True
 
-        # confidence
-        conf = np.zeros(L, dtype=np.float32)
         has_confidence = has_structure.copy()
 
+        # =====================================================
+        # 🔥 Confidence computation
+        # =====================================================
+        conf = np.zeros(L, dtype=np.float32)
+
         if is_alphafold:
+            # pLDDT normalization
             conf[has_structure] = full_b[has_structure] / 100.0
         else:
             valid_b = full_b[has_structure]
+
             if len(valid_b) == 0:
                 return None
 
             median = np.median(valid_b)
-            mad = np.median(np.abs(valid_b - median)) + eps
+            mad = np.median(np.abs(valid_b - median)) + 1e-6
 
-            z = (full_b - median) / mad
-            sigmoid = 1 / (1 + np.exp(z))  # equals σ(-z)
+            z = np.zeros_like(full_b)
 
-            local_conf = full_occ * sigmoid
+            # Compute ONLY on valid positions
+            z[has_structure] = (full_b[has_structure] - median) / mad
 
-            # global resolution scaling
+            # Optional: clip for safety
+            z = np.clip(z, -50, 50)
+
+            sigmoid = np.zeros_like(full_b)
+            sigmoid[has_structure] = 1 / (1 + np.exp(z[has_structure]))
+
+            local_conf = np.zeros_like(full_b)
+            local_conf[has_structure] = full_occ[has_structure] * sigmoid[has_structure]
+
             global_conf = 1.0
             if resolution is not None:
                 global_conf = 1.0 / (1.0 + max(0.0, resolution - 2.5))
 
             conf = global_conf * local_conf
 
+        # =====================================================
+        # Return
+        # =====================================================
         return {
             "coords": torch.from_numpy(full_coords),
             "has_structure": torch.from_numpy(has_structure),
@@ -182,12 +230,12 @@ def parse_structure(cif_path: Path, fasta_seq: str, chain_id: str = None, eps: f
             "is_alphafold": is_alphafold
         }
 
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] {cif_path}: {e}")
         return None
 
-
 #Edge Builder
-def build_radius_graph(coords, has_structure, cutoff=10.0):
+def build_radius_graph(coords, has_structure, cutoff=10):
     """
     Build undirected radius graph using PyTorch Geometric.
 
@@ -206,7 +254,7 @@ def build_radius_graph(coords, has_structure, cutoff=10.0):
 
     row, col = edge_index
     diff = coords_valid[col] - coords_valid[row]
-    dist = torch.norm(diff, dim=1, keepdim=True)
+    dist = torch.norm(diff, dim=1, keepdim=True).clamp(min=1e-8)
     direction = diff / dist
 
     edge_attr = torch.cat([dist, direction], dim=1)
@@ -297,6 +345,50 @@ def construct_graph(data, edge_index, edge_attr):
 
     return graph
 
+def process_single_entry(label, chain_id, cif_path, fasta_seq, cutoff=10):
+    """
+    Full pipeline for ONE protein:
+    CIF → structure → graph
+
+    Returns:
+        (label, graph_dict) OR (label, None)
+    """
+
+    try:
+        # ---- Extract chain ----
+        # chain_id = extract_chain_id(label)
+
+        # ---- Parse structure ----
+        data = parse_structure(
+            Path(cif_path),
+            fasta_seq,
+            chain_id=chain_id
+        )
+
+        if data is None:
+            # logger.error(f"{label} failed. parse_structure returned None")
+            return label, None
+
+        # ---- Build graph ----
+        edge_index, edge_attr = build_radius_graph(
+            data["coords"],
+            data["has_structure"],
+            cutoff=cutoff
+        )
+
+        if edge_index is None:
+            logger.error(f"{label} failed. edge_index is None")
+            return label, None
+
+        # ---- Construct graph ----
+        graph = construct_graph(data, edge_index, edge_attr)
+
+        return label, graph
+
+    except Exception as e:
+        logger.error(f"[ERROR] {label}: {e}")
+        return label, None
+
 
 def save_shard(shard_dict, shard_id, output_dir):
     """
@@ -305,32 +397,30 @@ def save_shard(shard_dict, shard_id, output_dir):
     path = Path(output_dir) / f"graph_shard_{shard_id:04d}.pt"
     torch.save(shard_dict, path)
 
+def create_shard_build_dataset(dataset_type, split, fasta_path):
+    dataset = []
+    protein_info = get_protein_info(fasta_path)
+    for protein in protein_info:
+        protein_entry_id = protein["entry_id"]
+        protein_full_id = protein["full_id"]
+        sequence = protein["sequence"]
+        chain_id = protein["chain"]
+        cif_path = Path(f"structures/{dataset_type}/{dataset_type}_{split}/{protein_entry_id.lower()}.cif")
+        dataset.append((protein_full_id, chain_id, cif_path, sequence))
+    return dataset
 
 def build_graph_shards(
-    dataset,                  # List[Tuple[label, cif_path, fasta_seq]]
-    output_dir,
+    dataset,
+    dataset_type,
+    split,
     shard_size=1000,
     cutoff=10.0
 ):
-    """
-    Build structural graph shards.
 
-    Each shard:
-        Dict[label → graph_dict]
-
-    Also produces:
-        graph_index.pt → Dict[label → shard_id]
-
-    Design guarantees:
-    - deterministic shard assignment (sorted labels)
-    - no failed entries included
-    - memory-efficient (one shard at a time)
-    """
-
+    output_dir = f"graph_shards/{dataset_type}_graph_shards/{split}"
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ---- Deterministic ordering ----
     dataset = sorted(dataset, key=lambda x: x[0])
 
     current_shard = {}
@@ -341,62 +431,36 @@ def build_graph_shards(
     failed_parse = 0
     failed_graph = 0
 
-    for label, cif_path, fasta_seq in tqdm(dataset):
+    for label, chain_id, cif_path, fasta_seq in tqdm(dataset, desc="Building graph shards" ):
 
-        chain_id = extract_chain_id(label)
-
-        # ---- Parse structure ----
-        data = parse_structure(
-            Path(cif_path),
-            fasta_seq,
-            chain_id=chain_id
+        label, graph = process_single_entry(
+            label, chain_id, cif_path, fasta_seq, cutoff
         )
 
-        if data is None:
+        if graph is None:
+            # distinguish failure type (optional)
             failed_parse += 1
             continue
 
-        # ---- Build graph ----
-        edge_index, edge_attr = build_radius_graph(
-            data["coords"],
-            data["has_structure"],
-            cutoff=cutoff
-        )
-
-        if edge_index is None:
-            failed_graph += 1
-            continue
-
-        # ---- Construct graph ----
-        graph = construct_graph(data, edge_index, edge_attr)
-
-        # ---- Add to shard ----
         current_shard[label] = graph
         label_to_shard[label] = current_shard_id
         total_written += 1
 
-        # ---- Save shard if full ----
         if len(current_shard) >= shard_size:
             save_shard(current_shard, current_shard_id, output_dir)
             current_shard = {}
             current_shard_id += 1
 
-    # ---- Save final shard ----
     if len(current_shard) > 0:
         save_shard(current_shard, current_shard_id, output_dir)
 
-    # ---- Save index ----
-    index_path = output_dir / "graph_index.pt"
-    torch.save(label_to_shard, index_path)
+    torch.save(label_to_shard, output_dir / "graph_index.pt")
 
-    # ---- Sanity check ----
-    assert len(label_to_shard) == total_written, \
-        "Mismatch between index and written graphs"
+    assert len(label_to_shard) == total_written
 
     print("\nFinished:")
     print(f"  Total graphs: {total_written}")
-    print(f"  Failed (parse): {failed_parse}")
-    print(f"  Failed (graph): {failed_graph}")
+    print(f"  Failed: {failed_parse}")
     print(f"  Total shards: {current_shard_id + 1}")
 
 
@@ -424,16 +488,17 @@ def validate_random_samples(output_dir, num_samples=10):
     print(f"Validation passed for {len(samples)} samples.")
 
 
-if __name__ == "__main__":
-    fasta_path = Path("clean_af_fasta_files/cleaned_af_test.fasta")
-    protein_info = get_protein_info(fasta_path)
-    for protein in tqdm(protein_info[:2], desc = "experiment running"):
-        protein_id = protein["entry_id"]
-        sequence = protein["sequence"]
-        chain_id = protein["chain"]
-        path_to_cif_file = Path(f"structures/af/af_test/{protein_id}.cif")
-        structure_info = parse_structure(path_to_cif_file, sequence, chain_id)
-        print(structure_info)
+# if __name__ == "__main__":
+    # fasta_path = Path("xray_filtered_pdb/filtered_pdb_test.fasta")
+    # protein_info = get_protein_info(fasta_path)
+    # for protein in tqdm(protein_info[:2], desc = "experiment running"):
+    #     protein_id = protein["entry_id"]
+    #     sequence = protein["sequence"]
+    #     chain_id = protein["chain"]
+    #     path_to_cif_file = Path(f"structures/af/af_test/{protein_id.lower()}.cif")
+    #     print(path_to_cif_file)
+    #     structure_info = parse_structure(path_to_cif_file, sequence, chain_id)
+    #     print(structure_info)
         # edge_idx, edge_attr = build_radius_graph(structure_info["coords"], structure_info["has_structure"])
         # coverage, mean_conf, max_conf = compute_global_stats(structure_info["has_structure"],structure_info["confidence"])
 
