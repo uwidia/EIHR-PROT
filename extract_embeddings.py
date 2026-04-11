@@ -15,6 +15,7 @@ import logging
 from utils import setup_logging
 from preprocessing import sha256_file
 from parser import get_dataset_hashes
+from tqdm import tqdm
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -72,7 +73,7 @@ class ESMShardDataset(Dataset):
         return len(self.index)
     
     def _validate_shard(self, shard: dict, shard_file: Path):
-         """
+        """
         Validate structure and basic integrity of a shard file.
         Performs lightweight checks on keys, types, and tensor shapes.
         """
@@ -141,6 +142,7 @@ class ESMShardDataset(Dataset):
         label = self._current_shard["labels"][local_seq_idx]
 
         return rep, label
+        #should be return {"representation" : rep, "label": label, "edge_index": edge_index, "coords": coords}
 
 class BufferState:
     """
@@ -242,9 +244,9 @@ def create_manifest(output_dir: Path, filename: str):
     """
     Creates manifest (csv) for tracking essential information for all sequences in shard directory 
     """
-      manifest_path = output_dir / f"{filename}.csv"
+    manifest_path = output_dir / f"{filename}.csv"
 
-      if not manifest_path.exists():
+    if not manifest_path.exists():
         with manifest_path.open("w", newline="") as f_manifest:
             writer = csv.writer(f_manifest)
             writer.writerow(
@@ -259,7 +261,7 @@ def create_manifest(output_dir: Path, filename: str):
                 ]
             )
         logger.info(f"Manifest created. Saved to {manifest_path}")
-    
+
 def update_manifest( output_dir: Path, filename: str, manifest_list: list[list]):
     """
     Appends new sequence information to manifest csv
@@ -280,6 +282,7 @@ def extract_fasta_embeddings(
     fasta_path: str,
     output_dir: str,
     valid_hashes_path: str = "hashlist.txt",
+    manifest_filename: str = "manifest",
     model_name: str = "esm2_t33_650M_UR50D",
     toks_per_batch: int = 4096,
     truncation_seq_length: int = 1022,
@@ -292,28 +295,29 @@ def extract_fasta_embeddings(
     ):
 
     """
-    Extracts sequence information from fasta file, batches and loads sequences to esm model.
-    Runs inference and extracts per token embeddings for each sequence.
-    Saves per sequence index mapping and other information to a manifest.
-    Saves sequence representations across multiple shards based on specified shard length
+    Extract embeddings from sequences in a FASTA file using an ESM model.
+
+    Batches sequences, runs model inference, extracts embeddings, and saves
+    them in shards with an accompanying manifest. Also records run metadata
+    for reproducibility.
 
     Args:
-        fasta_path(str): Path to fasta file
-        output_dir: Directory for saving shards
-        valid_hashes_path (str): Path to valid hashes for original preprocessed fasta file
-        model_name (str): Selected esm model
-        toks_per_batch (int): Max tokens permitted for each batch
-        truncation_seq_length (int): Length limit for sequences
-        repr_layer (int): Model layer for extracting sequence representations
-        shard_size (int): Max number of sequences per shard
-        use_fp16 (bool): Convert sequence representations to float16
-        seed (int): Controls randomness and enables reproducibility
-        deterministic (bool): Ensures reproducibility on similar machine/software stacks
-        device (str): Device type (i.e cuda or cpu)
+        fasta_path (str): Input FASTA file.
+        output_dir (str): Directory for shard files and manifest.
+        valid_hashes_path (str, optional): Path to valid SHA256 hashes. Defaults to "hashlist.txt".
+        model_name (str, optional): ESM model to use. Defaults to "esm2_t33_650M_UR50D".
+        toks_per_batch (int, optional): Max tokens per batch. Defaults to 4096.
+        truncation_seq_length (int, optional): Max sequence length. Defaults to 1022.
+        repr_layer (int | None, optional): Layer to extract embeddings from. Defaults to last layer.
+        shard_size (int, optional): Number of sequences per shard. Defaults to 1000.
+        use_fp16 (bool, optional): Cast embeddings to float16. Defaults to True.
+        seed (int, optional): Random seed for reproducibility. Defaults to 0.
+        deterministic (bool, optional): Enforce deterministic behavior. Defaults to True.
+        device (str | None, optional): Device for model. Defaults to auto-select GPU if available.
     """
 
     fasta_path = Path(fasta_path).resolve()
-    filename = f"{fasta_path.stem}.csv"
+    filename = f"{manifest_filename}"
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     valid_hashes_path= Path(valid_hashes_path).resolve()
@@ -361,7 +365,7 @@ def extract_fasta_embeddings(
         running_idx = 0
         local_seq_idx = 0
         manifest_list = []
-        for batch_idx, (labels, strs, toks) in enumerate(data_loader):
+        for batch_idx, (labels, strs, toks) in enumerate(tqdm(data_loader, total=len(batches), desc="Extracting embeddings")):
             logger.info(
                 f"Batch {batch_idx+1}/{len(batches)} "
                 f"({len(labels)} sequences)"
@@ -461,6 +465,7 @@ def main():
     parser.add_argument("--fasta", type=str, required=True)
     parser.add_argument("--outdir", type=str, required=True)
     parser.add_argument("--valid_hashes", type=str, required=True)
+    parser.add_argument("--manifest_filename", type=str, default="manifest")
     parser.add_argument("--model", type=str, default="esm2_t33_650M_UR50D")
     parser.add_argument("--toks_per_batch", type=int, default=4096)
     parser.add_argument("--truncation_seq_length", type=int, default=1022)
@@ -476,6 +481,7 @@ def main():
         fasta_path=args.fasta,
         output_dir=args.outdir,
         valid_hashes_path = args.valid_hashes,
+        manifest_filename=args.manifest_filename,
         model_name=args.model,
         toks_per_batch=args.toks_per_batch,
         truncation_seq_length=args.truncation_seq_length,
@@ -494,14 +500,6 @@ if __name__ == "__main__":
 
 
 
-"""
-Suggestions for later:
-Do tqdm
-Set up logic for resumption of embedding download
-handle possibility of failed/broken downloads or failed batching
-Add: A --dry_run flag that validates the FASTA file, prints batch sizes, and estimates GPU memory usage without actually running inference. 
-It's a small addition but shows you think about usability, which is exactly what entry-level ML engineering roles look for.
-"""
 
 
 
