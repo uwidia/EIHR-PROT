@@ -14,11 +14,12 @@ import hashlib
 import logging
 
 logger = logging.getLogger(__name__)
+
 _thread_local = local()
 
 
 def _make_session():
-     """
+    """
     Create a configured requests session with retry and connection pooling.
 
     Returns:
@@ -111,7 +112,7 @@ def download_one_af_structure(protein_id: str, save_dir: str, timeout: tuple):
 
 #Download a single cif file (PDB)
 def download_one_pdb_structure(pdb_id: str, save_dir: str, timeout: tuple):
-     """
+    """
     Download a protein structure CIF file from the RCSB PDB.
 
     Args:
@@ -155,7 +156,7 @@ def download_multiple_structures_fast(
     max_workers: int =8,
     log_failures: bool =True):
 
-     """
+    """
     Download multiple protein structure CIF files in parallel.
 
     Reads protein IDs from a FASTA file, skips already-downloaded files,
@@ -309,7 +310,7 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024):
     return h.hexdigest()
 
 def save_hash(fasta_path: Path):
-     """
+    """
     Compute and append the SHA-256 hash of a file to 'hashlist.txt'.
 
     Args:
@@ -455,6 +456,7 @@ def clean_af_fasta_file_header(split_fasta_path: Path, output_filename: str):
 
     """
 Suggestions for later:
+- Add check to warn for unsupported pdb file types. So warn and reject non-xray types
 - USE CONFIG FILES OR ENV VARS TO REPLACE HARDCODED STUFF
 - Add unit testing
 - Handle partial downloads
