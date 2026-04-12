@@ -234,7 +234,7 @@ def flush_shard(shard_buffer: BufferState, output_dir: Path):
         output_file,
     )
 
-    logger.info(f"Saved {output_file} ({len(shard_buffer.buffer_reps)} proteins). Flushing shard...")
+
     
 
     shard_buffer.next_shard()
