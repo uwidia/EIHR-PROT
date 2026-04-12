@@ -365,11 +365,14 @@ def extract_fasta_embeddings(
         running_idx = 0
         local_seq_idx = 0
         manifest_list = []
-        for batch_idx, (labels, strs, toks) in enumerate(tqdm(data_loader, total=len(batches), desc="Extracting embeddings")):
-            logger.info(
-                f"Batch {batch_idx+1}/{len(batches)} "
-                f"({len(labels)} sequences)"
+        pbar = tqdm(data_loader, total=len(batches), desc="Extracting embeddings")
+        for batch_idx, (labels, strs, toks) in enumerate(pbar):
+            pbar.set_postfix(
+                batch = f"{batch_idx + 1}/{len(batches)}",
+                seqs = len(labels),
+                shard = shard_buffer.shard_id,
             )
+        
             
             toks = toks.to(device, non_blocking=(device == "cuda"))
         
@@ -410,11 +413,7 @@ def extract_fasta_embeddings(
             running_idx += len(labels)
 
             update_manifest(output_dir, filename, manifest_list)
-            logger.info(f"Manifest update for batch {batch_idx} completed successfully")
-            manifest_list = []
-            logger.info(
-                f"Processed batch {batch_idx + 1}/{len(batches)} ({len(labels)} sequences)"
-            )
+        
 
     flush_shard(shard_buffer, output_dir)
     logger.info("Embedding extraction complete!")
