@@ -1,55 +1,47 @@
 #Import libraries
-from pathlib import Path
-import preprocessing
-from parser import get_protein_info
+import reliability_aware.config as config
+import reliability_aware.preprocessing as preprocessing
 import logging
-
+from reliability_aware.utils import setup_logging
 logger = logging.getLogger(__name__)
-from utils import setup_logging
 
 setup_logging()
 
-#Save paths for AFSet and PDBset
-af_train_data_path = Path("dataset/nrAF-Model-GO_train_sequences.fasta")
-af_test_data_path = Path("dataset/nrAF-Model-GO_test_sequences.fasta")
-af_val_data_path = Path("dataset/nrAF-Model-GO_val_sequences.fasta")
-
-pdb_train_data_path = Path("dataset/nrPDB-GO_2019.06.18_train_sequences.fasta")
-pdb_test_data_path = Path("dataset/nrPDB-GO_2019.06.18_test_sequences.fasta")
-pdb_val_data_path = Path("dataset/nrPDB-GO_2019.06.18_val_sequences.fasta")
-
-
 datasets = [
-    ("pdb", "train", pdb_train_data_path),
-    ("pdb", "test", pdb_test_data_path),
-    ("pdb", "val", pdb_val_data_path),
-    ("af", "train", af_train_data_path),
-    ("af", "test", af_test_data_path),
-    ("af", "val", af_val_data_path),
+    ("pdb", "train", config.RAW_PDB_TRAIN_DATA),
+    ("pdb", "test", config.RAW_PDB_TEST_DATA),
+    ("pdb", "val", config.RAW_PDB_VAL_DATA),
+    ("af", "train", config.RAW_AF_TRAIN_DATA),
+    ("af", "test", config.RAW_AF_TEST_DATA),
+    ("af", "val", config.RAW_AF_VAL_DATA),
 ]
 
 pipeline_results = {}
 
 def main():
-    for dataset_type, split, fasta_path in datasets:
+    for dataset_type, split, fasta_file_path in datasets:
+        output_file = f"cleaned_{dataset_type}_{split}"
+        structure_dir = config.PROJECT_ROOT / f"structures/{dataset_type}/{dataset_type}_{split}"
+
         if dataset_type not in pipeline_results:
             pipeline_results[dataset_type] = {}
 
 
-        # pipeline_results[dataset_type][split] = {}
+        pipeline_results[dataset_type][split] = {}
 
-        # #Download AFSet and PDBset files
-        # save_dir = f"structures/{dataset_type}/{dataset_type}_{split}"
+        #Download AFSet and PDBset files
+        
+        structure_dir.mkdir(parents = True, exist_ok = True)
 
-        # download_fn = preprocessing.download_one_af_structure if dataset_type == "af" else preprocessing.download_one_pdb_structure
+        download_fn = preprocessing.download_one_af_structure if dataset_type == "af" else preprocessing.download_one_pdb_structure
 
 
-        # print(f"Downloading structures for {dataset_type}_{split}....")
-        # download_result = preprocessing.download_multiple_structures_fast(
-        #     fasta_path, save_dir, download_fn
-        # )
+        logger.info(f"Downloading structures for {dataset_type}_{split}....")
+        download_result = preprocessing.download_multiple_structures_fast(
+            fasta_file_path, structure_dir, download_fn
+        )
 
-        # pipeline_results[dataset_type][split]["download"] = download_result
+        pipeline_results[dataset_type][split]["download"] = download_result
 
         # Handle PDBSet-specific concerns 
         if dataset_type == "pdb":
@@ -60,54 +52,48 @@ def main():
             You can uncomment it if you wish to verify counts yourself
             """
 
-            # counts_result = preprocessing.count_methods_per_split(split)
+            # counts_result = preprocessing.count_methods_per_split(split, save_dir)
             # pipeline_results[dataset_type][split]["counts"] = counts_result
 
             #Remove all non-xray derived structure files from each split
-            # deleted, failed, missing, retained = preprocessing.delete_non_xray_structures(split)
+            deleted, failed, missing, retained = preprocessing.delete_non_xray_structures(split, structure_dir)
 
-            # filter_result = {
-            #     "deleted": deleted,
-            #     "failed": failed,
-            #     "missing": missing,
-            #     "retained": retained
-            # }
+            filter_result = {
+                "deleted": deleted,
+                "failed": failed,
+                "missing": missing,
+                "retained": retained
+            }
 
-            # pipeline_results[dataset_type][split]["xray_structure_filter"] = filter_result
+            pipeline_results[dataset_type][split]["xray_structure_filter"] = filter_result
+            logger.info(f"Non-xray sequences deleted. IDs of retained protein sequences saved to {config.RETAINED_XRAY_IDS}_{split}.txt")
 
             # Create new fasta files per split with xray-derived PDBset sequences only
-            split_xray_ids_path = Path(f"retained_xray_ids_pdb_{split}.txt")
-            split_fasta_path = Path(f"dataset/nrPDB-GO_2019.06.18_{split}_sequences.fasta")
-
-            output_filename = f"filtered_pdb_{split}"
-            
+            retained_xray_ids = f"{config.RETAINED_XRAY_IDS}_{split}.txt" #file already created by delete_non_xray_structures function
 
             preprocessing.filter_xray_struct(
-                split_xray_ids_path,
-                split_fasta_path,
-                output_filename
+                retained_xray_ids,
+                fasta_file_path,
+                output_file
             )
 
-            # pipeline_results[dataset_type][split]["xray_fasta_sequence_filter"] = {
-            #     "input_fasta": str(split_fasta_path),
-            #     "xray_ids": str(split_xray_ids_path),
-            #     "output_name": output_filename
-            # }
+            pipeline_results[dataset_type][split]["xray_fasta_sequence_filter"] = {
+                "input_fasta": str(fasta_file_path),
+                "xray_ids": str(retained_xray_ids),
+                "output_name": output_file
+            }
 
 
         #Handle AFset specific concerns
         if dataset_type == "af":
-
-            split_fasta_path = Path(f"dataset/nrAF-Model-GO_{split}_sequences.fasta")
-            output_filename = f"cleaned_af_{split}"
             preprocessing.clean_af_fasta_file_header(
-                split_fasta_path,
-                output_filename
+                fasta_file_path,
+                output_file
             )
 
-            # pipeline_results[dataset_type][split]["clean_af_fasta_file_header"] = {
-            #     "input_fasta": str(split_fasta_path),
-            #     "output_name": output_filename
-            # }
+            pipeline_results[dataset_type][split]["clean_af_fasta_file_header"] = {
+                "input_fasta": str(fasta_file_path),
+                "output_name": output_file
+            }
 if __name__ == "__main__":
     main()

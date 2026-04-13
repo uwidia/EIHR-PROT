@@ -6,17 +6,23 @@ from urllib3.util.retry import Retry
 from tqdm import tqdm
 from pathlib import Path
 from collections import defaultdict
-from parser import get_protein_info, get_method, get_xray_ids
+from reliability_aware.parser import get_protein_info, get_method, get_xray_ids
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio import SeqIO
 import hashlib
 import logging
+import reliability_aware.config as config
 
 logger = logging.getLogger(__name__)
 
 _thread_local = local()
 
+pdb_paths = {
+        "train": config.RAW_PDB_TRAIN_DATA,
+        "test": config.RAW_PDB_TEST_DATA,
+        "val": config.RAW_PDB_VAL_DATA
+        }
 
 def _make_session():
     """
@@ -232,7 +238,7 @@ def download_multiple_structures_fast(
 
 
 #Count the number of methods for each protein entry in a split (i.e. train, test, or val)
-def count_methods_per_split(pdb_split: str):
+def count_methods_per_split(pdb_split: str, structure_dir: Path):
     """
     Count structure determination methods for a dataset split.
 
@@ -242,6 +248,7 @@ def count_methods_per_split(pdb_split: str):
 
     Args:
         pdb_split (str): Dataset split name ("train", "val", or "test").
+        structure_dir (Path): Path to directory containing structure files (.cif)
 
     Returns:
         tuple:
@@ -260,20 +267,19 @@ def count_methods_per_split(pdb_split: str):
         raise ValueError("pdb_split should be one of: train, val, or test")
     
     methods_freq_count = defaultdict(int)
+    protein_id_path = pdb_paths[pdb_split]
 
-    protein_id_path = Path(f"dataset/nrPDB-GO_2019.06.18_{pdb_split}_sequences.fasta")
     protein_entries = get_protein_info(protein_id_path)
 
     for protein in tqdm(protein_entries, desc = "Methods counted"):
         
-
-        cif_path = Path(f"structures/pdb/pdb_{pdb_split}/{protein['entry_id']}.cif")
+        structure_file = structure_dir /f"{protein['entry_id']}.cif"
         entry_id = protein["entry_id"]
 
-        if cif_path.exists():
+        if structure_file.exists():
             if entry_id not in cached_method_info:
                 try: 
-                    cached_method_info[entry_id] = get_method(cif_path)
+                    cached_method_info[entry_id] = get_method(structure_file)
                 except Exception as err:
                     errors[entry_id] = f"There was an error with {entry_id}: {err}"
                     continue
@@ -309,18 +315,19 @@ def sha256_file(path: Path, chunk_size: int = 1024 * 1024):
             h.update(chunk)
     return h.hexdigest()
 
-def save_hash(fasta_path: Path):
+def save_hash(fasta_path: Path, hashlist_file: Path = config.PROJECT_ROOT/"hashlist.txt"):
     """
     Compute and append the SHA-256 hash of a file to 'hashlist.txt'.
 
     Args:
         fasta_path (Path): File to hash.
+        hashlist_file (Path): File containing list of valid hashes for datasets
     """
     file_hash = sha256_file(fasta_path)
-    with open("hashlist.txt", "a") as file:
+    with open(hashlist_file, "a") as file:
         file.write(f"{file_hash}\n")
 
-def delete_non_xray_structures(pdb_split: str): 
+def delete_non_xray_structures(pdb_split: str, structure_dir: Path): 
     """
     Remove non–X-ray diffraction CIF files for a dataset split.
 
@@ -329,6 +336,7 @@ def delete_non_xray_structures(pdb_split: str):
 
     Args:
         pdb_split (str): Dataset split ("train", "val", or "test").
+        structure_dir (Path): Path to the directory containing structure files (.cif)
 
     Returns:
         tuple:
@@ -344,47 +352,47 @@ def delete_non_xray_structures(pdb_split: str):
     if pdb_split not in accepted_values:
         raise ValueError("pdb_split should be one of: train, val, or test")
 
-    protein_id_path = Path(f"dataset/nrPDB-GO_2019.06.18_{pdb_split}_sequences.fasta")
+    protein_id_path = pdb_paths[pdb_split]
     protein_entries = get_protein_info(protein_id_path)
     unique_ids = {protein["entry_id"] for protein in protein_entries}
 
     deleted = set()
     failed = {}
-    cif_files_not_found = set()
+    structure_files_not_found = set()
     retained = set()
     for unique_id in tqdm(unique_ids, desc = f"Deleting non-xray structures from pdb_{pdb_split}"):
+        structure_file = structure_dir / f"{unique_id}.cif"
 
-        cif_path = Path(f"structures/pdb/pdb_{pdb_split}/{unique_id}.cif")
-    
-
-        if not cif_path.exists():
-            cif_files_not_found.add(unique_id)
+        if not structure_file.exists():
+            structure_files_not_found.add(unique_id)
             continue
             
         try:
-            method = get_method(cif_path)
+            method = get_method(structure_file)
         except Exception as err:
             failed[unique_id] = f"There was an error parsing the cif file {err}"
             continue
         
         try:
             if "X-RAY DIFFRACTION" not in method:
-                cif_path.unlink()
+                structure_file.unlink()
                 deleted.add(unique_id)
         except Exception as err:
             failed[unique_id] = f"There was an error deleting the file {err}"
             continue
         else:
             retained.add(unique_id)
-        
-    output_dir = Path(f"retained_xray_ids_pdb_{pdb_split}.txt")
+
+    output_dir = config.RETAINED_XRAY_IDS/ f"_{pdb_split}.txt"
+
     with open(output_dir, "w", encoding= "utf-8") as file:
         for retained_id in retained:
             file.write(f"{retained_id}\n")
-    logger.info(f"""Deleted files: {len(deleted)} | Missing Cif files: {len(cif_files_not_found)} 
+
+    logger.info(f"""Deleted files: {len(deleted)} | Missing structure files: {len(structure_files_not_found)} 
     | Failed to process: {len(failed)} | Retained files: {len(retained)} | Output Directory: {output_dir}""")
 
-    return deleted, failed, cif_files_not_found, retained
+    return deleted, failed, structure_files_not_found, retained
 
 
 #Filter fasta file to extract x-ray protein-ids and sequences
@@ -410,7 +418,7 @@ def filter_xray_struct(valid_xray_ids_file_path: Path, split_fasta_path: Path, o
             record = SeqRecord(Seq(protein["sequence"]), id=protein["full_id"], description = "")
             records.append(record)
 
-    save_dir = Path("./xray_filtered_pdb")
+    save_dir = config.DATA_DIR / "cleaned_dataset/pdb"
     save_dir.mkdir(parents=True, exist_ok=True)
 
     save_path = save_dir / f"{output_filename}.fasta"
@@ -423,7 +431,7 @@ def filter_xray_struct(valid_xray_ids_file_path: Path, split_fasta_path: Path, o
 
 
 #Remove extra characters (nrAF-) in fasta file header. filter_xray_struct has already handled this for pdb files
-def clean_af_fasta_file_header(split_fasta_path: Path, output_filename: str):
+def clean_af_fasta_file_header(raw_fasta_file: Path, output_filename: str):
     """
     Clean FASTA headers and rewrite sequences to a new file.
 
@@ -436,13 +444,13 @@ def clean_af_fasta_file_header(split_fasta_path: Path, output_filename: str):
     Returns:
         str: "completed" on success.
     """
-    protein_entries = get_protein_info(split_fasta_path)
+    protein_entries = get_protein_info(raw_fasta_file)
     records = []
     for protein in protein_entries:
         record = SeqRecord(Seq(protein["sequence"]), id=protein["full_id"], description = "")
         records.append(record)
     
-    save_dir = Path("./clean_af_fasta_files")
+    save_dir = config.DATA_DIR / f"cleaned_dataset/af"
     save_dir.mkdir(parents=True, exist_ok=True)
 
     save_path = save_dir / f"{output_filename}.fasta"

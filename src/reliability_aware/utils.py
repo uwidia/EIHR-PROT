@@ -1,9 +1,9 @@
 import logging
 
 def setup_logging():
-    logger = logging.getLogger()  # root logger
+    logger = logging.getLogger()  
     
-    # Avoid adding duplicate handlers if called multiple times
+    
     if logger.handlers:
         return logger
     

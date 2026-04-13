@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-import fair-esm
-from fair-esm import FastaBatchedDataset
+import esm
+from esm import FastaBatchedDataset
 import logging
 from utils import setup_logging
 from preprocessing import sha256_file
