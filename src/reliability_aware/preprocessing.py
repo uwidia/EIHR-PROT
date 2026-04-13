@@ -415,6 +415,8 @@ def filter_xray_struct(valid_xray_ids_file_path: Path, split_fasta_path: Path, o
     valid_xray_ids = get_xray_ids(valid_xray_ids_file_path)
     for protein in protein_entries:
         if protein["entry_id"] in valid_xray_ids:
+            if not (protein["sequence"].isalpha() and protein["full_id"]):
+                continue
             record = SeqRecord(Seq(protein["sequence"]), id=protein["full_id"], description = "")
             records.append(record)
 
@@ -447,6 +449,8 @@ def clean_af_fasta_file_header(raw_fasta_file: Path, output_filename: str):
     protein_entries = get_protein_info(raw_fasta_file)
     records = []
     for protein in protein_entries:
+        if not (protein["sequence"].isalpha() and protein["full_id"]):
+            continue
         record = SeqRecord(Seq(protein["sequence"]), id=protein["full_id"], description = "")
         records.append(record)
     
