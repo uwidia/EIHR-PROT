@@ -3,10 +3,9 @@ import numpy as np
 import torch
 from pathlib import Path
 from torch_geometric.nn import radius_graph
-from parser import get_protein_info
 from pathlib import Path
 from tqdm import tqdm
-from parser import get_protein_info
+from reliability_aware.parser import get_protein_info
 import logging
 import parasail
 
@@ -85,9 +84,9 @@ def map_fasta_to_cif_parasail(fasta_seq, cif_seq, protein_id=None, logger=None):
 # =====================================================
 # 🔬 Main Parser
 # =====================================================
-def parse_structure(cif_path, fasta_seq, chain_id):
+def parse_structure(structure_file, fasta_seq, chain_id):
     try:
-        doc = gemmi.cif.read_file(str(cif_path))
+        doc = gemmi.cif.read_file(str(structure_file))
         block = doc.sole_block()
 
         table = block.find([
@@ -103,7 +102,7 @@ def parse_structure(cif_path, fasta_seq, chain_id):
         ])
 
         if table is None or len(table) == 0:
-            logger.error(f"[TABLE EMPTY] {cif_path.stem}")
+            logger.error(f"[TABLE EMPTY] {structure_file.stem}")
             return None
 
         # =====================================================
@@ -146,7 +145,7 @@ def parse_structure(cif_path, fasta_seq, chain_id):
         if not is_alphafold:
             mask_chain = (chain == chain_id)
             if mask_chain.sum() == 0:
-                logger.error(f"[CHAIN FAIL] {cif_path.stem}: chain {chain_id}")
+                logger.error(f"[CHAIN FAIL] {structure_file.stem}: chain {chain_id}")
                 return None
 
             atom_name = atom_name[mask_chain]
@@ -162,7 +161,7 @@ def parse_structure(cif_path, fasta_seq, chain_id):
         ca_mask = (atom_name == "CA")
 
         if ca_mask.sum() == 0:
-            logger.error(f"[NO CA] {cif_path.stem}")
+            logger.error(f"[NO CA] {structure_file.stem}")
             return None
 
         atom_name = atom_name[ca_mask]
@@ -194,18 +193,18 @@ def parse_structure(cif_path, fasta_seq, chain_id):
 
             else:
                 logger.warning(
-                    f"[FALLBACK ALIGN] {cif_path.stem}: matches={len(matches)}"
+                    f"[FALLBACK ALIGN] {structure_file.stem}: matches={len(matches)}"
                 )
 
                 result = map_fasta_to_cif_parasail(
                     fasta_seq,
                     cif_seq,
-                    protein_id=cif_path.stem,
+                    protein_id=structure_file.stem,
                     logger=logger
                 )
 
                 if result is None:
-                    logger.error(f"[FINAL FAIL] {cif_path.stem}")
+                    logger.error(f"[FINAL FAIL] {structure_file.stem}")
                     return None
 
                 _, inv_mapping = result
@@ -224,7 +223,7 @@ def parse_structure(cif_path, fasta_seq, chain_id):
         valid = (idx >= 0) & (idx < L)
 
         if valid.sum() == 0:
-            logger.error(f"[INDEX FAIL] {cif_path.stem}")
+            logger.error(f"[INDEX FAIL] {structure_file.stem}")
             return None
 
         idx = idx[valid]
@@ -294,7 +293,7 @@ def parse_structure(cif_path, fasta_seq, chain_id):
         }
 
     except Exception as e:
-        logger.error(f"[EXCEPTION] {cif_path}: {e}")
+        logger.error(f"[EXCEPTION] {structure_file}: {e}")
         return None
 
 #Edge Builder
@@ -408,7 +407,7 @@ def construct_graph(data, edge_index, edge_attr):
 
     return graph
 
-def process_single_entry(label, chain_id, cif_path, fasta_seq, cutoff=10):
+def process_single_entry(label, chain_id, structure_file, fasta_seq, cutoff=10):
     """
     Full pipeline for ONE protein:
     CIF → structure → graph
@@ -423,7 +422,7 @@ def process_single_entry(label, chain_id, cif_path, fasta_seq, cutoff=10):
 
         # ---- Parse structure ----
         data = parse_structure(
-            Path(cif_path),
+            Path(structure_file),
             fasta_seq,
             chain_id=chain_id
         )
@@ -460,7 +459,7 @@ def save_shard(shard_dict, shard_id, output_dir):
     path = Path(output_dir) / f"graph_shard_{shard_id:04d}.pt"
     torch.save(shard_dict, path)
 
-def create_shard_build_dataset(dataset_type, split, fasta_path):
+def create_shard_build_dataset(dataset_type, split, fasta_path, structure_file):
     dataset = []
     protein_info = get_protein_info(fasta_path)
     for protein in protein_info:
@@ -468,8 +467,8 @@ def create_shard_build_dataset(dataset_type, split, fasta_path):
         protein_full_id = protein["full_id"]
         sequence = protein["sequence"]
         chain_id = protein["chain"]
-        cif_path = Path(f"structures/{dataset_type}/{dataset_type}_{split}/{protein_entry_id.lower()}.cif")
-        dataset.append((protein_full_id, chain_id, cif_path, sequence))
+        structure_file = structure_file / f"{protein_entry_id.lower()}.cif"
+        dataset.append((protein_full_id, chain_id, structure_file, sequence))
     return dataset
 
 def build_graph_shards(
@@ -494,10 +493,10 @@ def build_graph_shards(
     failed_parse = 0
     failed_graph = 0
 
-    for label, chain_id, cif_path, fasta_seq in tqdm(dataset, desc="Building graph shards" ):
+    for label, chain_id, structure_file, fasta_seq in tqdm(dataset, desc="Building graph shards" ):
 
         label, graph = process_single_entry(
-            label, chain_id, cif_path, fasta_seq, cutoff
+            label, chain_id, structure_file, fasta_seq, cutoff
         )
 
         if graph is None:
