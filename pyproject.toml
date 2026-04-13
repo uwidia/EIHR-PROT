@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "reliability-aware"
 version = "0.1.0"
@@ -16,6 +20,9 @@ dependencies = [
     "torch-cluster",
     "tqdm>=4.67.3",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/reliability_aware"]
 
 [tool.uv.extra-build-dependencies]
 torch-cluster = ["torch"]
