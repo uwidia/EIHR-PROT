@@ -1,0 +1,30 @@
+[project]
+name = "reliability-aware"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "biopython>=1.87",
+    "fair-esm>=2.0.0",
+    "gemmi>=0.7.5",
+    "numpy>=2.4.4",
+    "parasail>=1.3.4",
+    "requests>=2.33.1",
+    "torch==2.11.0",
+    "torch-geometric>=2.7.0",
+    "torch-cluster",
+    "tqdm>=4.67.3",
+]
+
+[tool.uv.extra-build-dependencies]
+torch-cluster = ["torch"]
+
+[tool.uv.sources]
+torch-cluster = { index = "pyg-cpu-211" }
+
+[[tool.uv.index]]
+name = "pyg-cpu-211"
+url = "https://data.pyg.org/whl/torch-2.11.0+cpu.html"
+format = "flat"
+explicit = true
