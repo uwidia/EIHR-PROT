@@ -359,24 +359,7 @@ def extract_fasta_embeddings(
         dataset=dataset,
     )
 
-#Custom collate_fn for dataloader for the ESMShardDataset object. It makes all sequences equal length with the longest sequence by padding
-def collate_fn(batch: list[list]):
-    reps = [item[0] for item in batch]
-    labels = [item[1] for item in batch]
 
-    lengths = [r.shape[0] for r in reps]
-    max_len = max(lengths)
-    dim = reps[0].shape[1]
-
-    padded = torch.zeros(len(reps), max_len, dim)
-    mask = torch.zeros(len(reps), max_len, dtype=torch.bool)
-
-    for i, r in enumerate(reps):
-        L = r.shape[0]
-        padded[i, :L] = r
-        mask[i, :L] = 1
-
-    return padded, mask, labels
 
 
 
