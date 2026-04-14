@@ -2,14 +2,11 @@ from torch.utils.data import Dataset
 import torch
 import csv
 from pathlib import Path
-
 import csv
-import random
-from collections import OrderedDict, defaultdict, deque
+from collections import OrderedDict, defaultdict
 from pathlib import Path
-
 import torch
-from torch.utils.data import Dataset, Sampler
+from torch.utils.data import Dataset
 
 
 class ESMShardDataset(Dataset):
