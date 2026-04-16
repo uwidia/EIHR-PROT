@@ -74,6 +74,3 @@ def get_dataset_hashes(file_path: Path):
         hashlist_txt = file.read()
         hashlist = [line.strip() for line in file]
     return hashlist
-
-
-"consider moving most of these functions to utils and renaming parser to structure parser and keeping most of the functions in the distance_calc module here"
