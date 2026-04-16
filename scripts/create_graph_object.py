@@ -1,9 +1,11 @@
-import reliability_aware.structure_processing as structure_processing
+from reliability_aware.graph_shard_builder import build_aligned_graph_shards
 from pathlib import Path
-from reliability_aware.utils import setup_logging
 import reliability_aware.config as config
+from reliability_aware.parser import get_protein_info
+from reliability_aware.graph_shard_builder import build_aligned_graph_shards, process_single_entry
 
-setup_logging()
+
+config.setup_logging()
 
 def main():
     datasets = [
@@ -15,12 +17,22 @@ def main():
         ("pdb", "val")
     ]
 
+    ESM_MANIFEST_PATH = ""
+
+    #PENDING: download esm manifest from runpod, save here; extract the graphs with my cpu; and then upload to runpod network volume
+
     for dataset_type, split in datasets:   
         fasta_path = config.DATA_DIR / f"cleaned_dataset/{dataset_type}/cleaned_{dataset_type}_{split}.fasta" 
         structure_file = config.PROJECT_ROOT / f"structures/{dataset_type}/{dataset_type}_{split}"
-        shard_build_dataset = structure_processing.create_shard_build_dataset(dataset_type, split, fasta_path, structure_file)
-        structure_processing.build_graph_shards(shard_build_dataset, dataset_type, split)
-        structure_processing.validate_random_samples(f"graph_shards/{dataset_type}_graph_shards/{split}")
+        shard_build_dataset = build_aligned_graph_shards(
+            manifest_path = "path/to/esm_manifest.csv",
+            fasta_path = fasta_path,
+            structure_dir = structure_file,
+            output_dir = config.PROJECT_ROOT / f"graph_shards/{dataset_type}_graph_shards/{split}",
+            get_protein_info_fn = get_protein_info,
+            process_single_entry_fn = process_single_entry,
+            cutoff = 10.0,
+        )
 
 if __name__ == "__main__":
     main()
