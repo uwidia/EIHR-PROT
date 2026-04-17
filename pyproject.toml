@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
+
 dependencies = [
     "biopython>=1.87",
     "fair-esm>=2.0.0",
@@ -21,17 +22,20 @@ dependencies = [
     "tqdm>=4.67.3",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/reliability_aware"]
-
 [tool.uv.extra-build-dependencies]
 torch-cluster = ["torch"]
 
 [tool.uv.sources]
-torch-cluster = { index = "pyg-cpu-211" }
+torch = { index = "pytorch-cu128" }
+torch-cluster = { index = "pyg-cu128-211" }
 
 [[tool.uv.index]]
-name = "pyg-cpu-211"
-url = "https://data.pyg.org/whl/torch-2.11.0+cpu.html"
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pyg-cu128-211"
+url = "https://data.pyg.org/whl/torch-2.11.0+cu128.html"
 format = "flat"
 explicit = true
