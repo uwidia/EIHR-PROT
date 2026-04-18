@@ -6,14 +6,19 @@ A multimodal protein function (GO term) prediction  project that combines sequen
 
 ## Overview
 
-This project is built around a simple idea: not all biological evidence is equally trustworthy.
-Sequence embeddings from large protein language models are useful, but they do not explicitly encode structural uncertainty. Structural information can add important signal, but its reliability varies across proteins and even across residues. This project tries to account for that directly by building a function prediction pipeline that uses both sequence and structure features, while explicitly modeling structural confidence during graph construction, pooling, and downstream decision-making. 
+This project is built around the simple idea that not all biological evidence is equally trustworthy.
+Sequence embeddings from large protein language models are useful, but they do not explicitly encode structural uncertainty. Structural information can add important signal, but its reliability varies across proteins and even across residues. 
+
+This predictive model accounts for this signal variability by using sequence and structure features along with a homology prior, while explicitly modeling structural confidence during graph construction, pooling, and downstream decision-making. 
+
+It is designed based on the hypothesis that incorporating a reliability-aware gate that down-weights unreliable structural regions based on a structure confidence proxy instead of blindly trusting every residue-level structural feature will lead to more accurate and interpretable GO term predictions. 
+The graph construction code already computes residue confidence proxies, edge reliability weights, and graph-level summary statistics for this purpose.
 
 ---
 
 ## Current Status
 
-NOTE: **This repository is still under active development.**
+NOTE:⚠️ **This repository is still under active development.**
 
 The preprocessing and representation-building stages are already implemented. That includes structure download and cleanup, cleaned FASTA generation, per-residue ESM embedding extraction into shards, manifest creation, graph shard construction aligned to the ESM shards, and sequence-side scalar attention pooling. 
 
@@ -24,8 +29,7 @@ The full end-to-end multimodal predictor is **not finished yet**. The graph enco
 ## Why this project exists
 
 Most protein function prediction pipelines treat all available inputs as if they are equally trustworthy. That is usually false.
-This model is built on the hypothesis that incorporating a reliability-aware gate that down-weights unreliable structural regions based on a structure confidence proxy instead of blindly trusting every residue-level structural feature will lead to more accurate and interpretable GO term predictions. 
-The graph construction code already computes residue confidence proxies, edge reliability weights, and graph-level summary statistics for this purpose.
+
 
 ---
 
@@ -144,7 +148,7 @@ That order is not optional. Graph shards depend on the ESM manifest, and the gra
 
 ---
 
-### Step 1 — Preprocess structures and FASTA files
+### Step 1: Preprocess structures and FASTA files
 
 ```bash
 uv run python run_preprocessing.py
@@ -159,7 +163,7 @@ This script:
 
 ---
 
-### Step 2 — Extract ESM embeddings
+### Step 2: Extract ESM embeddings
 
 Example:
 
@@ -190,7 +194,7 @@ Repeat this step for each dataset split you need.
 
 ---
 
-### Step 3 — Build graph shards aligned to the ESM shards
+### Step 3: Build graph shards aligned to the ESM shards
 
 ```bash
 uv run python create_graph_object.py
