@@ -26,13 +26,6 @@ The full end-to-end multimodal predictor is **not finished yet**. The graph enco
 
 ---
 
-## Why this project exists
-
-Most protein function prediction pipelines treat all available inputs as if they are equally trustworthy. That is usually false.
-
-
----
-
 ## Features
 
 ### Completed
