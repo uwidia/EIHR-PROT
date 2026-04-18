@@ -8,6 +8,7 @@ A multimodal protein function (GO term) prediction  project that combines sequen
 
 This project is built around a simple idea: not all biological evidence is equally trustworthy.
 Sequence embeddings from large protein language models are useful, but they do not explicitly encode structural uncertainty. Structural information can add important signal, but its reliability varies across proteins and even across residues. This project tries to account for that directly by building a function prediction pipeline that uses both sequence and structure features, while explicitly modeling structural confidence during graph construction, pooling, and downstream decision-making. 
+
 ---
 
 ## Current Status
@@ -21,9 +22,11 @@ The full end-to-end multimodal predictor is **not finished yet**. The graph enco
 ---
 
 ## Why this project exists
+
 Most protein function prediction pipelines treat all available inputs as if they are equally trustworthy. That is usually false.
 This model is built on the hypothesis that incorporating a reliability-aware gate that down-weights unreliable structural regions based on a structure confidence proxy instead of blindly trusting every residue-level structural feature will lead to more accurate and interpretable GO term predictions. 
 The graph construction code already computes residue confidence proxies, edge reliability weights, and graph-level summary statistics for this purpose.
+
 ---
 
 ## Features
