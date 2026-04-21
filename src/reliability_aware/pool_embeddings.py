@@ -248,8 +248,7 @@ def multimodal_collate_fn(batch):
             edge_attr = torch.cat([graph["edge_attr"].float(), graph["edge_weight"].float().unsqueeze(1)], dim = 1),
             mean_confidence = graph["mean_confidence"].float(),
             std_confidence = graph["std_confidence"].float(),
-            source = graph["is_alphafold"].bool(),
-            r_pdb = 0.0 if is_alphafold else graph["resolution"].float(),
+            r_pdb =  graph["resolution"].float(),
             y = None,
             label = label,
         )

@@ -7,7 +7,6 @@ import parasail
 from collections import defaultdict
 from pathlib import Path
 from tqdm import tqdm
-from reliability_aware.structure_processing import process_single_entry, compute_global_stats
 from reliability_aware.parser import get_protein_info
 from torch_geometric.nn import radius_graph
 
@@ -55,66 +54,67 @@ def build_aligned_graph_shards(
     rows_by_shard = defaultdict(list)
     for row in manifest_rows:
         rows_by_shard[row["shard_number"]].append(row)
-
+    total_rows = len(manifest_rows)
     total_ok = 0
     total_failed = 0
+    with tqdm(total= total_rows, desc = "Building aligned graph shards: ", miniters=1, mininterval=0.0) as pbar: 
+        for shard_id in sorted(rows_by_shard.keys()):
+            rows = sorted(rows_by_shard[shard_id], key=lambda r: r["local_seq_idx"])
 
-    for shard_id in tqdm(sorted(rows_by_shard.keys()), desc="Building aligned graph shards"):
-        rows = sorted(rows_by_shard[shard_id], key=lambda r: r["local_seq_idx"])
+            # Enforce contiguous local indices
+            expected = list(range(len(rows)))
+            observed = [r["local_seq_idx"] for r in rows]
+            if observed != expected:
+                raise ValueError(
+                    f"Shard {shard_id} local_seq_idx mismatch. "
+                    f"Expected {expected[:5]}..., got {observed[:5]}..."
+                )
 
-        # Enforce contiguous local indices
-        expected = list(range(len(rows)))
-        observed = [r["local_seq_idx"] for r in rows]
-        if observed != expected:
-            raise ValueError(
-                f"Shard {shard_id} local_seq_idx mismatch. "
-                f"Expected {expected[:5]}..., got {observed[:5]}..."
-            )
+            shard_graphs = []
 
-        shard_graphs = []
+            for row in rows:
+                try: 
+                    label = row["label"]
+                    trunc_len = row["truncated_length"]
 
-        for row in rows:
-            label = row["label"]
-            trunc_len = row["truncated_length"]
+                    if label not in label_lookup:
+                        logger.error(f"[MISSING FASTA INFO] {label}")
+                        shard_graphs.append(None)
+                        total_failed += 1
+                        continue
 
-            if label not in label_lookup:
-                logger.error(f"[MISSING FASTA INFO] {label}")
-                shard_graphs.append(None)
-                total_failed += 1
-                continue
+                    info = label_lookup[label]
+                    structure_file = structure_dir / f"{info['entry_id'].lower()}.cif"
 
-            info = label_lookup[label]
-            structure_file = structure_dir / f"{info['entry_id'].lower()}.cif"
+                    label_out, graph = process_single_entry_fn(
+                        label=label,
+                        chain_id=info["chain_id"],
+                        structure_file=structure_file,
+                        fasta_seq=info["sequence"],
+                        cutoff=cutoff,
+                    )
 
-            label_out, graph = process_single_entry_fn(
-                label=label,
-                chain_id=info["chain_id"],
-                structure_file=structure_file,
-                fasta_seq=info["sequence"],
-                cutoff=cutoff,
-            )
+                    if graph is None:
+                        shard_graphs.append(None)
+                        total_failed += 1
+                        continue
 
-            if graph is None:
-                shard_graphs.append(None)
-                total_failed += 1
-                continue
+                    shard_graphs.append(graph)
+                    total_ok += 1
+                finally:
+                    pbar.update(1)
+                
 
-            # truncate graph tensors to match truncated ESM embeddings
-            graph = _truncate_graph_to_length(graph, trunc_len)
+            _save_aligned_graph_shard(shard_graphs, shard_id, output_dir)
 
-            shard_graphs.append(graph)
-            total_ok += 1
-
-        _save_aligned_graph_shard(shard_graphs, shard_id, output_dir)
-
-    metadata = {
-        "num_manifest_rows": len(manifest_rows),
-        "num_graphs_ok": total_ok,
-        "num_graphs_failed": total_failed,
-        "alignment": "graph_shard_k graphs[i] aligned to ESM shard k local_seq_idx i",
-    }
-    torch.save(metadata, output_dir / "graph_shard_metadata.pt")
-    logger.info(f"Done! Graphs built: {total_ok} | Graphs failed: {total_failed} | Output dir: {output_dir}")
+        metadata = {
+            "num_manifest_rows": len(manifest_rows),
+            "num_graphs_ok": total_ok,
+            "num_graphs_failed": total_failed,
+            "alignment": "graph_shard_k graphs[i] aligned to ESM shard k local_seq_idx i",
+        }
+        torch.save(metadata, output_dir / "graph_shard_metadata.pt")
+        logger.info(f"Done! Graphs built: {total_ok} | Graphs failed: {total_failed} | Output dir: {output_dir}")
 
 def process_single_entry(label, chain_id, structure_file, fasta_seq, cutoff=10):
     """
@@ -203,24 +203,22 @@ def parse_structure(structure_file, fasta_seq: str, chain_id: str):
         # Retrive metadata
         methods = block.find_values("_exptl.method")
         method = "; ".join(methods) if methods else None
-        is_alphafold = (method is None)
 
         resolution = block.find_value("_refine.ls_d_res_high")
         resolution = float(resolution) if resolution not in [None, "?", "."] else None
 
-        # Chain filtering for experimentally-derived structures (i.e. PDB only)
-        if not is_alphafold:
-            mask_chain = (chain == chain_id)
-            if mask_chain.sum() == 0:
-                logger.error(f"parse_structure | [CHAIN FAIL] {structure_file.stem}: chain {chain_id}")
-                return None
+    # Chain filtering for experimentally-derived structures (i.e. PDB only)
+        mask_chain = (chain == chain_id)
+        if mask_chain.sum() == 0:
+            logger.error(f"parse_structure | [CHAIN FAIL] {structure_file.stem}: chain {chain_id}")
+            return None
 
-            atom_name = atom_name[mask_chain]
-            label_seq_id = label_seq_id[mask_chain]
-            res_name = res_name[mask_chain]
-            coords_all = coords_all[mask_chain]
-            bfactor = bfactor[mask_chain]
-            occupancy = occupancy[mask_chain]
+        atom_name = atom_name[mask_chain]
+        label_seq_id = label_seq_id[mask_chain]
+        res_name = res_name[mask_chain]
+        coords_all = coords_all[mask_chain]
+        bfactor = bfactor[mask_chain]
+        occupancy = occupancy[mask_chain]
 
         # filter for alpha carbon (CA) atoms only
         ca_mask = (atom_name == "CA")
@@ -239,13 +237,8 @@ def parse_structure(structure_file, fasta_seq: str, chain_id: str):
         # Build one-letter CIF sequence list from three-leter amino acid representation
         cif_seq = "".join(three_to_one_array(res_name))
         L = len(fasta_seq)
-
-        # Mapping of indices (for alphafold sequences with misalignment between cif_file sequence and curated protein sequences)
-        if is_alphafold:
-            idx = _perform_mapping(cif_seq, fasta_seq, structure_file.stem)
             
-        else:
-            idx = label_seq_id - 1 #zero-indexing
+        idx = label_seq_id - 1 #zero-indexing
 
         # Bounds check (i.e. Return none if no sequence information is present in the fasta file)
         valid = (idx >= 0) & (idx < L)
@@ -271,15 +264,17 @@ def parse_structure(structure_file, fasta_seq: str, chain_id: str):
         has_structure[idx] = True
 
         has_confidence = has_structure.copy()
-        conf = _calculate_confidence(is_alphafold, has_structure, full_b_factor, full_occupancy) #dim -> (L, )
+        conf = _calculate_confidence(has_structure, full_b_factor, full_occupancy, L) #dim -> (L, )
+        if conf is None:
+            logger.error(f"parse_structure | [CONFIDENCE FAIL] {structure_file.stem}")
+            return None
         
         return {
             "coords": torch.from_numpy(full_coords),
             "has_structure": torch.from_numpy(has_structure),
             "confidence": torch.from_numpy(conf.astype(np.float32)),
             "has_confidence": torch.from_numpy(has_confidence),
-            "resolution": resolution,
-            "is_alphafold": is_alphafold
+            "resolution": resolution
         }
 
     except Exception as e:
@@ -323,16 +318,17 @@ def construct_graph(data, edge_index, edge_attr):
     coords = data["coords"]
     has_structure = data["has_structure"]
     confidence = data["confidence"]
+    resolution = data["resolution"]
 
-    # ---- Global stats ----
-    coverage, mean_conf, std_conf, max_conf = _compute_global_stats(
+    #Global stats
+    coverage, mean_conf, std_conf = _compute_global_stats(
         has_structure, confidence
     )
 
-    # ---- Edge weights ----
+    # Edge weights
     edge_weight = _compute_edge_weights(edge_index, confidence)
 
-    #‼️‼️‼️‼️consider concating edge weight to attributes here then removing edge weight from the graph dict below
+
     graph = {
         # Core graph
         "coords": coords,                         # (L, 3)
@@ -347,12 +343,8 @@ def construct_graph(data, edge_index, edge_attr):
         # Global metadata
         "coverage": coverage,                     # float
         "mean_confidence": mean_conf,             # float
-        "std_confidence": std_conf,
-        "max_confidence": max_conf,               # float
-
-        # Source info
-        "is_alphafold": data["is_alphafold"],     # bool
-        "is_experimental": not data["is_alphafold"],
+        "std_confidence": std_conf,               # float
+        "resolution": resolution,
 
         # Experimental detail
         "resolution": data["resolution"],         # float or None
@@ -360,115 +352,33 @@ def construct_graph(data, edge_index, edge_attr):
 
     return graph
 
-#Map fasta and cif sequence indices
-def _perform_mapping(cif_seq:str, fasta_seq:str, protein_id: str):
-    matches = [
-        i for i in range(len(cif_seq))
-        if cif_seq.startswith(fasta_seq, i)
-    ]
-
-    if len(matches) == 1:
-        start = matches[0]
-        idx = (label_seq_id - 1) - start
-
-    else:
-        logger.warning(
-            f"[FALLBACK ALIGN] {protein_id}: matches={len(matches)}"
-        )
-
-        result = _map_fasta_to_cif_parasail(
-            fasta_seq,
-            cif_seq,
-            protein_id=protein_id
-        )
-
-        if result is None:
-            logger.error(f"[FINAL FAIL] {protein_id}")
-            return None
-
-        _, inv_mapping = result
-
-        idx = np.array([
-            inv_mapping.get(seq_id - 1, -1)
-            for seq_id in label_seq_id
-        ], dtype=np.int32)
-    return idx
-
-# Sequence alignment between fasta sequence and cif file sequence
-def _map_fasta_to_cif_parasail(fasta_seq:str, cif_seq:str, protein_id:str = None):
-    matrix = parasail.blosum62
-
-    result = parasail.nw_trace_striped_16(
-        fasta_seq,
-        cif_seq,
-        5,   # gap open
-        1,   # gap extend
-        matrix
-    )
-
-    if result.traceback is None:
-        logger.error(f"[ALIGN FAIL] {protein_id}: no traceback")
-
-    aligned_fasta = result.traceback.query
-    aligned_cif = result.traceback.ref
-
-    logger.warning(f"[ALIGN USED] {protein_id}: score={result.score}")
-    mapping = {}
-    inv_mapping = {}
-
-    f_idx = 0
-    c_idx = 0
-
-    for a, b in zip(aligned_fasta, aligned_cif):
-        if a != "-" and b != "-":
-            mapping[f_idx] = c_idx
-            inv_mapping[c_idx] = f_idx
-
-        if a != "-":
-            f_idx += 1
-        if b != "-":
-            c_idx += 1
-
-    coverage = len(mapping) / len(fasta_seq)
-
-    if coverage < 0.7:
-        logger.error(f"[ALIGN REJECTED] {protein_id}: coverage={coverage:.2f}")
-        return None
-
-    return mapping, inv_mapping
-
-def _calculate_confidence(is_alphafold: bool, has_structure, full_b_factor, full_occupancy):
+def _calculate_confidence(has_structure, full_b_factor, full_occupancy, sequence_length):
+    L = sequence_length
     conf = np.zeros(L, dtype=np.float32)
 
-    if is_alphafold:
-        conf[has_structure] = full_b_factor[has_structure] / 100.0
-    else:
-        valid_b = full_b_factor[has_structure]
+    valid_b = full_b_factor[has_structure]
 
-        if len(valid_b) == 0:
-            return None
+    if len(valid_b) == 0:
+        return None
 
-        median = np.median(valid_b)
-        mad = np.median(np.abs(valid_b - median)) + 1e-6
+    median = np.median(valid_b)
+    mad = np.median(np.abs(valid_b - median)) + 1e-6
 
-        z = np.zeros_like(full_b_factor)
-        z[has_structure] = (full_b_factor[has_structure] - median) / mad
-        z = np.clip(z, -50, 50)
+    z = np.zeros_like(full_b_factor)
+    z[has_structure] = (full_b_factor[has_structure] - median) / mad
+    z = np.clip(z, -50, 50)
 
-        sigmoid = np.zeros_like(full_b_factor)
-        sigmoid[has_structure] = 1 / (1 + np.exp(z[has_structure]))
+    sigmoid = np.zeros_like(full_b_factor)
+    sigmoid[has_structure] = 1 / (1 + np.exp(z[has_structure]))
 
-        local_conf = np.zeros_like(full_b_factor)
-        local_conf[has_structure] = (
-            full_occupancy[has_structure] * sigmoid[has_structure]
-        )
+    local_conf = np.zeros_like(full_b_factor)
+    local_conf[has_structure] = (
+        full_occupancy[has_structure] * sigmoid[has_structure]
+    )
 
-        global_conf = 1.0
-        if resolution is not None:
-            global_conf = 1.0 / (1.0 + max(0.0, resolution - 2.5))
+    conf = local_conf
 
-        conf = global_conf * local_conf
-        return conf
+    return conf
 
 
 def _compute_global_stats(has_structure, confidence):
@@ -485,9 +395,8 @@ def _compute_global_stats(has_structure, confidence):
     coverage = float(mask.float().mean())
     mean_conf = float(conf_valid.mean())
     std_conf = float(conf_valid.std())
-    max_conf = float(conf_valid.max())
 
-    return coverage, mean_conf, std_conf, max_conf
+    return coverage, mean_conf, std_conf
 
 
 def _compute_edge_weights(edge_index, confidence):
@@ -586,37 +495,3 @@ def _save_aligned_graph_shard(
         path,
     )
 
-
-def _truncate_graph_to_length(graph: dict, trunc_len: int):
-    """
-    Truncate node-level graph tensors to trunc_len and drop edges that point beyond trunc_len.
-
-    Expected graph keys from your current pipeline:
-      coords, edge_index, edge_attr, edge_weight,
-      has_structure, confidence, coverage, mean_confidence, std_confidence, max_confidence,
-      is_alphafold, is_experimental, resolution
-    """
-    out = dict(graph)
-
-    # node-level tensors
-    out["coords"] = graph["coords"][:trunc_len]
-    out["has_structure"] = graph["has_structure"][:trunc_len]
-    out["confidence"] = graph["confidence"][:trunc_len]
-
-    edge_index = graph["edge_index"]
-    keep = (edge_index[0] < trunc_len) & (edge_index[1] < trunc_len)
-
-    out["edge_index"] = edge_index[:, keep]
-    out["edge_attr"] = graph["edge_attr"][keep]
-    out["edge_weight"] = graph["edge_weight"][keep]
-
-    # recompute summary stats after truncation
-    coverage, mean_conf, std_conf, max_conf = compute_global_stats(
-        out["has_structure"], out["confidence"]
-    )
-    out["coverage"] = coverage
-    out["mean_confidence"] = mean_conf
-    out["std_confidence"] = std_conf
-    out["max_confidence"] = max_conf
-
-    return out

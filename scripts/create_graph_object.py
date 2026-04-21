@@ -8,25 +8,19 @@ from reliability_aware.graph_shard_builder import build_aligned_graph_shards, pr
 config.setup_logging()
 
 def main():
-    datasets = [
-        ("af", "train"),
-        ("af", "test"),
-        ("af", "val"),
-        ("pdb", "train"),
-        ("pdb", "test"),
-        ("pdb", "val")
-    ]
-
     ESM_MANIFEST_PATH = config.PROJECT_ROOT / "esm_manifests"
+    CLEANED_PDB_DIR = config.DATA_DIR / f"cleaned_dataset/pdb"
+    STRUCTURE_DIR = config.PROJECT_ROOT / "structures/pdb"
+    OUTPUT_DIR = config.PROJECT_ROOT / "graph_shards"
 
-    for dataset_type, split in datasets:   
-        fasta_path = config.DATA_DIR / f"cleaned_dataset/{dataset_type}/cleaned_{dataset_type}_{split}.fasta" 
-        structure_file = config.PROJECT_ROOT / f"structures/{dataset_type}/{dataset_type}_{split}"
+    for split in ["train", "test", "val"]:   
+        fasta_path = CLEANED_PDB_DIR / f"cleaned_pdb_{split}.fasta" 
+        structure_file = STRUCTURE_DIR / f"pdb_{split}"
         shard_build_dataset = build_aligned_graph_shards(
-            manifest_path = ESM_MANIFEST_PATH / f"{dataset_type}_{split}_manifest.csv" ,
+            manifest_path = ESM_MANIFEST_PATH / f"pdb_{split}_manifest.csv" ,
             fasta_path = fasta_path,
             structure_dir = structure_file,
-            output_dir = config.PROJECT_ROOT / f"new_graph_shards/{dataset_type}_graph_shards/{split}",
+            output_dir = OUTPUT_DIR / f"pdb_{split}"
             get_protein_info_fn = get_protein_info,
             process_single_entry_fn = process_single_entry,
             cutoff = 10.0,
