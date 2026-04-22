@@ -22,7 +22,7 @@ NOTE:⚠️ **This repository is still under active development.**
 
 The preprocessing and representation-building stages are already implemented. That includes structure download and cleanup, cleaned FASTA generation, per-residue ESM embedding extraction into shards, manifest creation, graph shard construction aligned to the ESM shards, and sequence-side scalar attention pooling. 
 
-The full end-to-end multimodal predictor is **not finished yet**. The graph encoder, fusion block, homology prior integration, reliability gate, and final GO classifier are still in progress. The current codebase should be read as a research pipeline under construction rather than a finished training framework.
+The full end-to-end multimodal predictor is **not finished yet**. The homology prior integration, reliability gate, and final GO classifier are still in progress. The current codebase should be read as a research pipeline under construction rather than a finished training framework.
 
 ---
 
@@ -62,12 +62,15 @@ The full end-to-end multimodal predictor is **not finished yet**. The graph enco
   - cache-aware loading
   - custom hybrid batch sampler to reduce shard I/O bottlenecks
   - length-aware candidate batching within an active shard pool 
+- **GAT-based structure encoder**
+  - retrieves graph object from dataloader
+  - passes through a 2-layer GAT2conv network to obtain graph representation
+  - implements confidence weighted attention pooling on graph representation
+- **sequence + structure fusion via concatenation + MLP**
+  - Sequence and structure representations fused with simple concatenation and passed through a single layer MLP
 
 ---
-
 ### Planned
-- GAT-based structure encoder
-- sequence + structure fusion via concatenation + MLP
 - incorporation of homology prior branch
 - reliability gate over fused embeddings and homology logits
 - final GO term classifier
