@@ -86,7 +86,7 @@ def build_aligned_graph_shards(
                     info = label_lookup[label]
                     structure_file = structure_dir / f"{info['entry_id'].lower()}.cif"
 
-                    label_out, graph = process_single_entry_fn(
+                    _, graph = process_single_entry_fn(
                         label=label,
                         chain_id=info["chain_id"],
                         structure_file=structure_file,

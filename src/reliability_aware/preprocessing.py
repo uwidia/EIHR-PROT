@@ -67,55 +67,6 @@ def _get_session():
         _thread_local.session = _make_session()
     return _thread_local.session
 
-#Download a single cif file (AlphaFOld)
-def download_one_af_structure(protein_id: str, save_dir: str, timeout: tuple):
-    """
-    Download a protein structure CIF file from AlphaFold.
-
-    Args:
-        protein_id (str): UniProt protein identifier.
-        save_dir (str): Directory to save the CIF file.
-        timeout (tuple): Request timeout (connect, read).
-
-    Returns:
-        tuple: (protein_id, status, error_message)
-            status ∈ {"downloaded", "skipped", "failed"}.
-    """
-    save_dir = Path(save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-    file_path = save_dir / f"{protein_id}.cif"
-
-    if file_path.exists():
-        return protein_id, "skipped", None
-
-    api_endpoint = "https://alphafold.ebi.ac.uk/api/prediction/"
-    url = f"{api_endpoint}{protein_id}"
-    session = _get_session()
-
-    try:
-        r = session.get(url, timeout=timeout)
-
-        if r.status_code != 200:
-            return protein_id, "failed", f"HTTP {r.status_code}"
-
-        result = r.json()
-        if not result or "cifUrl" not in result[0]:
-            return protein_id, "failed", "Invalid JSON response or missing cifUrl for protein"
-        cif_url = result[0]["cifUrl"]
-        cif_r = session.get(cif_url, timeout = timeout)
-
-        if cif_r.status_code != 200:
-            return protein_id, "failed", f"HTTP {cif_r.status_code}"
-
-        file_path.write_bytes(cif_r.content)
-        return protein_id, "downloaded", None
-
-    except requests.RequestException as e:
-        return protein_id, "failed", str(e)
-    except (ValueError, KeyError, IndexError, TypeError) as e:
-        return protein_id, "failed", f"Bad API response {e}"
-
-
 #Download a single cif file (PDB)
 def download_one_pdb_structure(pdb_id: str, save_dir: str, timeout: tuple):
     """
@@ -429,40 +380,6 @@ def filter_xray_struct(valid_xray_ids_file_path: Path, split_fasta_path: Path, o
     SeqIO.write(records, save_path, "fasta")
     save_hash(save_path)
     logger.info(f"Filtering completed successfully. File saved to {save_path}")
-    return "completed"
-
-
-#Remove extra characters (nrAF-) in fasta file header. filter_xray_struct has already handled this for pdb files
-def clean_af_fasta_file_header(raw_fasta_file: Path, output_filename: str):
-    """
-    Clean FASTA headers and rewrite sequences to a new file.
-
-    Removes unwanted prefixes and preserves sequence data.
-
-    Args:
-        split_fasta_path (Path): Input FASTA file.
-        output_filename (str): Name of output FASTA file (without extension).
-
-    Returns:
-        str: "completed" on success.
-    """
-    protein_entries = get_protein_info(raw_fasta_file)
-    records = []
-    for protein in protein_entries:
-        if not (protein["sequence"].isalpha() and protein["full_id"]):
-            continue
-        record = SeqRecord(Seq(protein["sequence"]), id=protein["full_id"], description = "")
-        records.append(record)
-    
-    save_dir = config.DATA_DIR / f"cleaned_dataset/af"
-    save_dir.mkdir(parents=True, exist_ok=True)
-
-    save_path = save_dir / f"{output_filename}.fasta"
-
-
-    SeqIO.write(records, save_path, "fasta")
-    save_hash(save_path)
-    logger.info(f"Header cleaning completed successfully. File saved to {save_path}")
     return "completed"
 
 
