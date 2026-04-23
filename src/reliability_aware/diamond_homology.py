@@ -39,7 +39,7 @@ DIAMOND_OUTFMT_FIELDS = [
 
 @dataclass(frozen=True)
 class DiamondSearchConfig:
-    diamond_exe: str = "diamond"
+    diamond_exe: str = "diamond.exe"
     evalue_max: float = 1e-5
     min_query_coverage: float = 0.30
     max_target_seqs: int = 50
@@ -718,74 +718,3 @@ def _run_subprocess(cmd: Sequence[str]) -> None:
             f"External command failed with exit code {exc.returncode}: {' '.join(cmd)}"
         ) from exc
 
-
-# -----------------------------
-# Minimal end-to-end usage sketch
-# -----------------------------
-#
-# from reliability_aware.diamond_homology import (
-#     DiamondSearchConfig,
-#     build_subject_go_index,
-#     save_subject_go_index,
-#     save_go_vocab,
-#     read_fasta_as_dict,
-#     write_fasta_from_ids,
-#     build_diamond_database,
-#     run_diamond_blastp,
-#     build_aligned_homology_shards,
-# )
-#
-# # 1) Build FASTA for the training database only
-# all_sequences = read_fasta_as_dict("all_sequences.fasta")
-# train_ids = [...]  # labels/full_ids from your training split only
-# train_fasta = write_fasta_from_ids(train_ids, all_sequences, "diamond/train_db.fasta")
-#
-# # 2) Build GO vocabulary + training subject annotation index
-# go_terms = [...]  # fixed output GO vocabulary in training order
-# go_term_to_idx = {go: i for i, go in enumerate(go_terms)}
-# label_to_go_terms = {...}  # training protein label -> propagated GO terms
-# subject_index = build_subject_go_index(label_to_go_terms, go_term_to_idx)
-# save_subject_go_index(subject_index, "diamond/subject_go_index.json")
-# save_go_vocab(go_terms, "diamond/go_vocab.json")
-#
-# # 3) Build the DIAMOND database from training proteins only
-# cfg = DiamondSearchConfig(
-#     evalue_max=1e-5,
-#     min_query_coverage=0.30,
-#     max_target_seqs=50,
-#     top_k=10,
-#     sensitivity="sensitive",
-#     iterate=True,
-#     threads=16,
-# )
-# build_diamond_database(train_fasta, "diamond/train_db", cfg)
-#
-# # 4) Write query FASTA for one split and run DIAMOND
-# val_ids = [...]  # validation labels/full_ids
-# val_fasta = write_fasta_from_ids(val_ids, all_sequences, "diamond/val_queries.fasta")
-# run_diamond_blastp(val_fasta, "diamond/train_db", "diamond/val_hits.tsv", cfg)
-#
-# # 5) Build aligned homology shards that match the ESM manifest
-# build_aligned_homology_shards(
-#     manifest_path="esm_val/manifest.csv",
-#     diamond_tsv_path="diamond/val_hits.tsv",
-#     subject_go_index_json_path="diamond/subject_go_index.json",
-#     go_vocab_json_path="diamond/go_vocab.json",
-#     output_dir="diamond/val_homology_shards",
-#     config=cfg,
-#     exclude_self_hits=False,
-#     use_fp16=True,
-#     keep_debug_hits=True,
-# )
-#
-# # 6) For training split queries against training DB, exclude self-hits
-# #    to avoid trivial label leakage from exact self-matches.
-# build_aligned_homology_shards(
-#     manifest_path="esm_train/manifest.csv",
-#     diamond_tsv_path="diamond/train_hits.tsv",
-#     subject_go_index_json_path="diamond/subject_go_index.json",
-#     go_vocab_json_path="diamond/go_vocab.json",
-#     output_dir="diamond/train_homology_shards",
-#     config=cfg,
-#     exclude_self_hits=True,
-# )
