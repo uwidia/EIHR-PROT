@@ -33,7 +33,7 @@ class ReliabilityAwareProteinFunctionModel(nn.Module):
         num_classes: int,
         fusion_hidden_dim: int = 1024,
         fusion_out_dim: int = 512,
-        gate_q_dim: int = 9,
+        gate_q_dim: int = 8,
         gate_hidden_dim: int = 32,
         dropout: float = 0.2,
     ):
@@ -76,7 +76,7 @@ class ReliabilityAwareProteinFunctionModel(nn.Module):
             mask:            (B, Lmax)
             graph_batch:     PyG batch
             homology_scores: (B, C)  -> z^(h)
-            gate_features:   (B, 9)  -> q
+            gate_features:   (B, 8)  -> q
 
         Returns:
             dict with:
@@ -236,20 +236,12 @@ class HybridBatchSampler(Sampler):
             yield batch
 
 def multimodal_collate_fn(batch):
-    """
-    Returns:
-      padded_reps:   (B, Lmax, 1280)
-      mask:          (B, Lmax) bool
-      graph_batch:   torch_geometric.data.Batch
-      global_indices:(B,)
-      labels:        list[str]
-    """
     reps = [item["rep"] for item in batch]
     graphs = [item["graph"] for item in batch]
-    global_indices = torch.tensor([item["global_idx"] for item in batch], dtype=torch.long)
     labels = [item["label"] for item in batch]
+    global_indices = torch.tensor([item["global_idx"] for item in batch], dtype=torch.long)
 
-    # sequence branch
+    # Pad sequence reps
     lengths = [r.shape[0] for r in reps]
     max_len = max(lengths)
     dim = reps[0].shape[1]
@@ -263,9 +255,12 @@ def multimodal_collate_fn(batch):
         padded[i, :L] = r
         mask[i, :L] = True
 
-    # graph branch 
+    # Build graph batch
     pyg_graphs = []
-    for rep, graph, label in zip(reps, graphs, labels):
+    homology_priors = []
+    gate_features = []
+
+    for item, rep, graph, label in zip(batch, reps, graphs, labels):
         if graph is None:
             raise ValueError(f"Graph is None for label={label}")
 
@@ -275,24 +270,45 @@ def multimodal_collate_fn(batch):
                 f"graph has {graph['coords'].shape[0]}"
             )
 
-        confidence = graph["confidence"].float().unsqueeze(1)
-        x_aug = torch.cat([rep.float(), confidence], dim=1)
-        egde_weight =  graph["edge_weight"].float().unsqueeze(1)
-        edge_attr = torch.cat([graph["edge_attr"].float(), egde_weight], dim = 1)
+        edge_attr = torch.cat(
+            [
+                graph["edge_attr"].float(),
+                graph["edge_weight"].float().unsqueeze(1),
+            ],
+            dim=1,
+        )
 
         data = Data(
-            x = x_aug,  # node features for GAT (concatenated with structure confidence proxy values)
-            edge_index = graph["edge_index"].long(),
-            edge_attr = edge_attr,
-            mean_confidence = graph["mean_confidence"].float(),
-            std_confidence = graph["std_confidence"].float(),
-            r_pdb =  graph["resolution"].float(),
-            y = None,
-            label = label,
+            x=rep.float(),                              # (L, 1280)
+            confidence=graph["confidence"].float(),    # (L,)
+            edge_index=graph["edge_index"].long(),
+            edge_attr=edge_attr,                       # (E, 5)
+            label=label,
         )
         pyg_graphs.append(data)
 
+        # homology prior
+        homology_priors.append(item["homology_prior"].float())
+
+        # graph-side reliability features
+        mean_conf = torch.tensor(float(graph["mean_confidence"]), dtype=torch.float32)
+        std_conf = torch.tensor(float(graph["std_confidence"]), dtype=torch.float32)
+        coverage = torch.tensor(float(graph["coverage"]), dtype=torch.float32)
+
+
+        resolution = graph["resolution"]
+        r_pdb = 0.0 if resolution is None else float(resolution)
+        r_pdb = torch.tensor(r_pdb, dtype=torch.float32)
+
+        graph_q = torch.stack([mean_conf, std_conf, coverage])              # 3
+        homology_q = item["homology_gate"].float()                          # 4
+                                     # 2
+
+        q = torch.cat([graph_q, homology_q, r_pdb], dim=0)                  #8
+        gate_features.append(q)
+
     graph_batch = Batch.from_data_list(pyg_graphs)
+    homology_priors = torch.stack(homology_priors, dim=0)   # (B, C)
+    gate_features = torch.stack(gate_features, dim=0)       # (B, 8)
 
-    return padded, mask, graph_batch, global_indices, labels
-
+    return padded, mask, graph_batch, homology_priors, gate_features, global_indices, labels
