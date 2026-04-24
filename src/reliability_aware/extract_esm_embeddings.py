@@ -27,8 +27,124 @@ MANIFEST_COLUMNS = [
     "truncated_length",
 ]
 
+def extract_fasta_embeddings(
+    fasta_path: str,
+    output_dir: str,
+    valid_hashes_path: str = "hashlist.txt",
+    manifest_filename: str = "manifest",
+    model_name: str = "esm2_t33_650M_UR50D",
+    toks_per_batch: int = 4096,
+    truncation_seq_length: int = 1022,
+    repr_layer: int | None = None,
+    shard_size: int = 1000,
+    use_fp16: bool = True,
+    seed: int = 0,
+    deterministic: bool = True,
+    device: str | None = None,
+) -> None:
+    """Extract per-residue ESM embeddings from a FASTA file and save them in shards."""
+    fasta_path, output_dir, valid_hashes_path = _prepare_paths(
+        fasta_path=fasta_path,
+        output_dir=output_dir,
+        valid_hashes_path=valid_hashes_path,
+    )
 
-def set_reproducibility(seed: int = 0, deterministic: bool = True) -> None:
+    _set_reproducibility(seed=seed, deterministic=deterministic)
+
+    device = _resolve_device(device)
+    _warn_if_cpu_fp16(device, use_fp16)
+
+    model, alphabet = _load_esm_model(model_name, device=device)
+    repr_layer = _resolve_repr_layer(model, repr_layer)
+
+    _warn_if_fasta_hash_differs(fasta_path, valid_hashes_path)
+
+    dataset, batch_sampler, data_loader = _build_data_loader(
+        fasta_path=fasta_path,
+        alphabet=alphabet,
+        toks_per_batch=toks_per_batch,
+        truncation_seq_length=truncation_seq_length,
+        device=device,
+    )
+
+    manifest_path = create_manifest(output_dir, manifest_filename)
+    shard_buffer = BufferState()
+
+    running_idx = 0
+    local_seq_idx = 0
+
+    with torch.inference_mode():
+        progress_bar = tqdm(
+            data_loader,
+            total=len(batch_sampler),
+            desc="Extracting embeddings",
+        )
+
+        for batch_idx, (labels, sequences, toks) in enumerate(progress_bar):
+            progress_bar.set_postfix(
+                batch=f"{batch_idx + 1}/{len(batch_sampler)}",
+                seqs=len(labels),
+                shard=shard_buffer.shard_id,
+            )
+
+            toks = toks.to(device, non_blocking=(device == "cuda"))
+            representations = _run_model_on_batch(model, toks, repr_layer, batch_idx)
+            if representations is None:
+                continue
+
+            local_seq_idx, manifest_rows = _process_batch(
+                labels = labels,
+                sequences = sequences,
+                representations = representations,
+                shard_buffer = shard_buffer,
+                global_start_idx = running_idx,
+                local_seq_idx = local_seq_idx,
+                truncation_seq_length = truncation_seq_length,
+                shard_size = shard_size,
+                output_dir = output_dir,
+                use_fp16 = use_fp16,
+            )
+            append_manifest_rows(manifest_path, manifest_rows)
+            running_idx += len(labels)
+
+    flush_shard(shard_buffer, output_dir)
+    logger.info("Embedding extraction complete")
+
+    _write_run_metadata(
+        output_dir=output_dir,
+        model_name=model_name,
+        repr_layer=repr_layer,
+        truncation_seq_length=truncation_seq_length,
+        toks_per_batch=toks_per_batch,
+        seed=seed,
+        deterministic=deterministic,
+        device=device,
+        fasta_path=fasta_path,
+        dataset=dataset,
+    )
+
+def create_manifest(output_dir: Path, manifest_name: str) -> Path:
+    """Create the manifest CSV if it does not already exist."""
+    manifest_path = output_dir / f"{manifest_name}.csv"
+
+    if not manifest_path.exists():
+        with manifest_path.open("w", newline="") as manifest_file:
+            writer = csv.writer(manifest_file)
+            writer.writerow(MANIFEST_COLUMNS)
+        logger.info("Manifest created at %s", manifest_path)
+
+    return manifest_path
+
+def append_manifest_rows(manifest_path: Path, rows: list[list[object]]) -> None:
+    """Append a batch of rows to the manifest."""
+    if not rows:
+        return
+
+    with manifest_path.open("a", newline="") as manifest_file:
+        writer = csv.writer(manifest_file)
+        writer.writerows(rows)
+
+def _set_reproducibility(seed: int = 0, deterministic: bool = True) -> None:
     """Set seeds and deterministic flags for reproducible inference."""
     random.seed(seed)
     np.random.seed(seed)
@@ -43,7 +159,7 @@ def set_reproducibility(seed: int = 0, deterministic: bool = True) -> None:
         torch.backends.cudnn.deterministic = True
 
 
-def load_esm_model(model_name: str, device: str):
+def _load_esm_model(model_name: str, device: str):
     """Load a pretrained ESM model and freeze it for inference."""
     if not hasattr(esm.pretrained, model_name):
         raise ValueError(f"Unknown model: {model_name}")
@@ -59,7 +175,7 @@ def load_esm_model(model_name: str, device: str):
     return model, alphabet
 
 
-def prepare_paths(
+def _prepare_paths(
     fasta_path: str,
     output_dir: str,
     valid_hashes_path: str,
@@ -73,14 +189,14 @@ def prepare_paths(
     return fasta_file, output_path, hashes_file
 
 
-def resolve_device(device: str | None) -> str:
+def _resolve_device(device: str | None) -> str:
     """Choose a compute device if one is not explicitly provided."""
     resolved = device or ("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Using device: %s", resolved)
     return resolved
 
 
-def warn_if_cpu_fp16(device: str, use_fp16: bool) -> None:
+def _warn_if_cpu_fp16(device: str, use_fp16: bool) -> None:
     """Warn when fp16 is requested on CPU, which is usually very slow."""
     if device == "cpu" and use_fp16:
         logger.warning(
@@ -88,7 +204,7 @@ def warn_if_cpu_fp16(device: str, use_fp16: bool) -> None:
         )
 
 
-def resolve_repr_layer(model, repr_layer: int | None) -> int:
+def _resolve_repr_layer(model, repr_layer: int | None) -> int:
     """Use the final model layer unless a layer is explicitly requested."""
     if repr_layer is None:
         return model.num_layers
@@ -101,7 +217,7 @@ def resolve_repr_layer(model, repr_layer: int | None) -> int:
     return repr_layer
 
 
-def warn_if_fasta_hash_differs(fasta_path: Path, valid_hashes_path: Path) -> None:
+def _warn_if_fasta_hash_differs(fasta_path: Path, valid_hashes_path: Path) -> None:
     """Warn when the FASTA file hash differs from the expected preprocessing hashes."""
     fasta_hash = sha256_file(fasta_path)
     valid_hashes = get_dataset_hashes(valid_hashes_path)
@@ -113,7 +229,7 @@ def warn_if_fasta_hash_differs(fasta_path: Path, valid_hashes_path: Path) -> Non
         )
 
 
-def build_data_loader(
+def _build_data_loader(
     fasta_path: Path,
     alphabet,
     toks_per_batch: int,
@@ -136,30 +252,7 @@ def build_data_loader(
     return dataset, batch_sampler, data_loader
 
 
-def create_manifest(output_dir: Path, manifest_name: str) -> Path:
-    """Create the manifest CSV if it does not already exist."""
-    manifest_path = output_dir / f"{manifest_name}.csv"
-
-    if not manifest_path.exists():
-        with manifest_path.open("w", newline="") as manifest_file:
-            writer = csv.writer(manifest_file)
-            writer.writerow(MANIFEST_COLUMNS)
-        logger.info("Manifest created at %s", manifest_path)
-
-    return manifest_path
-
-
-def append_manifest_rows(manifest_path: Path, rows: list[list[object]]) -> None:
-    """Append a batch of rows to the manifest."""
-    if not rows:
-        return
-
-    with manifest_path.open("a", newline="") as manifest_file:
-        writer = csv.writer(manifest_file)
-        writer.writerows(rows)
-
-
-def run_model_on_batch(
+def _run_model_on_batch(
     model,
     toks: torch.Tensor,
     repr_layer: int,
@@ -175,7 +268,7 @@ def run_model_on_batch(
     return outputs["representations"][repr_layer].to("cpu")
 
 
-def process_batch(
+def _process_batch(
     labels: Sequence[str],
     sequences: Sequence[str],
     representations: torch.Tensor,
@@ -224,7 +317,7 @@ def process_batch(
     return local_seq_idx, manifest_rows
 
 
-def write_run_metadata(
+def _write_run_metadata(
     output_dir: Path,
     model_name: str,
     repr_layer: int,
@@ -258,100 +351,3 @@ def write_run_metadata(
     metadata_path = output_dir / "run_metadata.json"
     metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True))
     logger.info("Saved run metadata to %s", metadata_path)
-
-
-def extract_fasta_embeddings(
-    fasta_path: str,
-    output_dir: str,
-    valid_hashes_path: str = "hashlist.txt",
-    manifest_filename: str = "manifest",
-    model_name: str = "esm2_t33_650M_UR50D",
-    toks_per_batch: int = 4096,
-    truncation_seq_length: int = 1022,
-    repr_layer: int | None = None,
-    shard_size: int = 1000,
-    use_fp16: bool = True,
-    seed: int = 0,
-    deterministic: bool = True,
-    device: str | None = None,
-) -> None:
-    """Extract per-residue ESM embeddings from a FASTA file and save them in shards."""
-    fasta_path, output_dir, valid_hashes_path = prepare_paths(
-        fasta_path=fasta_path,
-        output_dir=output_dir,
-        valid_hashes_path=valid_hashes_path,
-    )
-
-    set_reproducibility(seed=seed, deterministic=deterministic)
-
-    device = resolve_device(device)
-    warn_if_cpu_fp16(device, use_fp16)
-
-    model, alphabet = load_esm_model(model_name, device=device)
-    repr_layer = resolve_repr_layer(model, repr_layer)
-
-    warn_if_fasta_hash_differs(fasta_path, valid_hashes_path)
-
-    dataset, batch_sampler, data_loader = build_data_loader(
-        fasta_path=fasta_path,
-        alphabet=alphabet,
-        toks_per_batch=toks_per_batch,
-        truncation_seq_length=truncation_seq_length,
-        device=device,
-    )
-
-    manifest_path = create_manifest(output_dir, manifest_filename)
-    shard_buffer = BufferState()
-
-    running_idx = 0
-    local_seq_idx = 0
-
-    with torch.inference_mode():
-        progress_bar = tqdm(
-            data_loader,
-            total=len(batch_sampler),
-            desc="Extracting embeddings",
-        )
-
-        for batch_idx, (labels, sequences, toks) in enumerate(progress_bar):
-            progress_bar.set_postfix(
-                batch=f"{batch_idx + 1}/{len(batch_sampler)}",
-                seqs=len(labels),
-                shard=shard_buffer.shard_id,
-            )
-
-            toks = toks.to(device, non_blocking=(device == "cuda"))
-            representations = run_model_on_batch(model, toks, repr_layer, batch_idx)
-            if representations is None:
-                continue
-
-            local_seq_idx, manifest_rows = process_batch(
-                labels = labels,
-                sequences = sequences,
-                representations = representations,
-                shard_buffer = shard_buffer,
-                global_start_idx = running_idx,
-                local_seq_idx = local_seq_idx,
-                truncation_seq_length = truncation_seq_length,
-                shard_size = shard_size,
-                output_dir = output_dir,
-                use_fp16 = use_fp16,
-            )
-            append_manifest_rows(manifest_path, manifest_rows)
-            running_idx += len(labels)
-
-    flush_shard(shard_buffer, output_dir)
-    logger.info("Embedding extraction complete")
-
-    write_run_metadata(
-        output_dir=output_dir,
-        model_name=model_name,
-        repr_layer=repr_layer,
-        truncation_seq_length=truncation_seq_length,
-        toks_per_batch=toks_per_batch,
-        seed=seed,
-        deterministic=deterministic,
-        device=device,
-        fasta_path=fasta_path,
-        dataset=dataset,
-    )
