@@ -67,43 +67,6 @@ def _get_session():
         _thread_local.session = _make_session()
     return _thread_local.session
 
-#Download a single cif file (PDB)
-def download_one_pdb_structure(pdb_id: str, save_dir: str, timeout: tuple):
-    """
-    Download a protein structure CIF file from the RCSB PDB.
-
-    Args:
-        pdb_id (str): PDB identifier.
-        save_dir (str): Directory to save the CIF file.
-        timeout (tuple): Request timeout (connect, read).
-
-    Returns:
-        tuple: (pdb_id, status, error_message)
-            status ∈ {"downloaded", "skipped", "failed"}.
-    """
-    save_dir = Path(save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
-    file_path = save_dir / f"{pdb_id}.cif"
-
-    if file_path.exists():
-        return pdb_id, "skipped", None
-
-    url = f"https://files.rcsb.org/download/{pdb_id}.cif"
-    session = _get_session()
-
-    try:
-        r = session.get(url, timeout=timeout)
-
-        if r.status_code == 200:
-            file_path.write_bytes(r.content)
-            return pdb_id, "downloaded", None
-
-        return pdb_id, "failed", f"HTTP {r.status_code}"
-
-    except requests.RequestException as e:
-        return pdb_id, "failed", str(e)
-
-
 #Download Multiple Cif Files Using Protein IDs (for PDBset and AFSet)
 def download_multiple_structures_fast(
     fasta_path: Path,
@@ -187,6 +150,42 @@ def download_multiple_structures_fast(
         "failure_reasons": failure_reasons,
     }
 
+#Download a single cif file (PDB)
+def download_one_pdb_structure(pdb_id: str, save_dir: str, timeout: tuple):
+    """
+    Download a protein structure CIF file from the RCSB PDB.
+
+    Args:
+        pdb_id (str): PDB identifier.
+        save_dir (str): Directory to save the CIF file.
+        timeout (tuple): Request timeout (connect, read).
+
+    Returns:
+        tuple: (pdb_id, status, error_message)
+            status ∈ {"downloaded", "skipped", "failed"}.
+    """
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+    file_path = save_dir / f"{pdb_id}.cif"
+
+    if file_path.exists():
+        return pdb_id, "skipped", None
+
+    url = f"https://files.rcsb.org/download/{pdb_id}.cif"
+    session = _get_session()
+
+    try:
+        r = session.get(url, timeout=timeout)
+
+        if r.status_code == 200:
+            file_path.write_bytes(r.content)
+            return pdb_id, "downloaded", None
+
+        return pdb_id, "failed", f"HTTP {r.status_code}"
+
+    except requests.RequestException as e:
+        return pdb_id, "failed", str(e)
+
 
 #Count the number of methods for each protein entry in a split (i.e. train, test, or val)
 def count_methods_per_split(pdb_split: str, structure_dir: Path):
@@ -245,38 +244,6 @@ def count_methods_per_split(pdb_split: str, structure_dir: Path):
             skipped.add(entry_id)  
            
     return methods_freq_count, skipped, errors
-
-def sha256_file(path: Path, chunk_size: int = 1024 * 1024):
-    """
-    Compute SHA-256 hash of a file.
-
-    Args:
-        path (Path): File to hash.
-        chunk_size (int, optional): Size of chunks to read.
-
-    Returns:
-        str: Hex digest of the file.
-    """
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()
-
-def save_hash(fasta_path: Path, hashlist_file: Path = config.PROJECT_ROOT/"hashlist.txt"):
-    """
-    Compute and append the SHA-256 hash of a file to 'hashlist.txt'.
-
-    Args:
-        fasta_path (Path): File to hash.
-        hashlist_file (Path): File containing list of valid hashes for datasets
-    """
-    file_hash = sha256_file(fasta_path)
-    with open(hashlist_file, "a") as file:
-        file.write(f"{file_hash}\n")
 
 def delete_non_xray_structures(pdb_split: str, structure_dir: Path): 
     """
@@ -382,14 +349,37 @@ def filter_xray_struct(valid_xray_ids_file_path: Path, split_fasta_path: Path, o
     logger.info(f"Filtering completed successfully. File saved to {save_path}")
     return "completed"
 
+def save_hash(fasta_path: Path, hashlist_file: Path = config.PROJECT_ROOT/"hashlist.txt"):
+    """
+    Compute and append the SHA-256 hash of a file to 'hashlist.txt'.
 
+    Args:
+        fasta_path (Path): File to hash.
+        hashlist_file (Path): File containing list of valid hashes for datasets
     """
-Suggestions for later:
-- Add check to warn for unsupported pdb file types. So warn and reject non-xray types
-- USE CONFIG FILES OR ENV VARS TO REPLACE HARDCODED STUFF
-- Add unit testing
-- Handle partial downloads
-- Set up download resumption logic
-- Manage broken or damaged files???
-- standardize naming + return with dataclasses instead of tuples/dicts
+    file_hash = _sha256_file(fasta_path)
+    with open(hashlist_file, "a") as file:
+        file.write(f"{file_hash}\n")
+
+def _sha256_file(path: Path, chunk_size: int = 1024 * 1024):
     """
+    Compute SHA-256 hash of a file.
+
+    Args:
+        path (Path): File to hash.
+        chunk_size (int, optional): Size of chunks to read.
+
+    Returns:
+        str: Hex digest of the file.
+    """
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+
