@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import csv
 import json
 import logging
@@ -9,7 +8,6 @@ from collections import defaultdict
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
-
 import torch
 import torch.nn as nn
 
@@ -84,33 +82,6 @@ class RetrievalStats:
             dtype=torch.float32,
         )
 
-
-def load_manifest_rows(manifest_path: str | Path) -> list[dict]:
-    """Load the ESM manifest in row order."""
-    manifest_path = Path(manifest_path).resolve()
-    rows: list[dict] = []
-
-    with manifest_path.open("r", newline="") as handle:
-        reader = csv.DictReader(handle)
-        missing = MANIFEST_REQUIRED_COLUMNS - set(reader.fieldnames or [])
-        if missing:
-            raise ValueError(f"Manifest missing required columns: {sorted(missing)}")
-
-        for row in reader:
-            rows.append(
-                {
-                    "shard_number": int(row["shard_number"]),
-                    "local_seq_idx": int(row["local_seq_idx"]),
-                    "global_seq_idx": int(row["global_seq_idx"]),
-                    "label": row["label"],
-                    "sequence_length": int(row["sequence_length"]),
-                    "truncated_length": int(row["truncated_length"]),
-                }
-            )
-
-    return rows
-
-
 def read_fasta_as_dict(fasta_path: str | Path) -> dict[str, str]:
     """
     Read a FASTA file into a mapping from sequence ID to sequence.
@@ -143,7 +114,6 @@ def read_fasta_as_dict(fasta_path: str | Path) -> dict[str, str]:
 
     return records
 
-
 def write_fasta_from_ids(
     ids: Sequence[str],
     sequence_lookup: Mapping[str, str],
@@ -166,7 +136,6 @@ def write_fasta_from_ids(
             handle.write(f"{sequence_lookup[seq_id]}\n")
 
     return output_fasta_path
-
 
 def build_subject_go_index(
     label_to_go_terms: Mapping[str, Sequence[str]],
@@ -200,30 +169,11 @@ def save_subject_go_index(
     output_json_path.write_text(json.dumps(serializable, indent=2, sort_keys=True))
     return output_json_path
 
-
-def load_subject_go_index(input_json_path: str | Path) -> dict[str, torch.Tensor]:
-    """
-    Load label -> GO index lists and convert them to CPU LongTensors for fast updates.
-    """
-    input_json_path = Path(input_json_path).resolve()
-    raw = json.loads(input_json_path.read_text())
-    return {
-        label: torch.tensor(indices, dtype=torch.long)
-        for label, indices in raw.items()
-    }
-
-
 def save_go_vocab(go_terms: Sequence[str], output_json_path: str | Path) -> Path:
     output_json_path = Path(output_json_path).resolve()
     output_json_path.parent.mkdir(parents=True, exist_ok=True)
     output_json_path.write_text(json.dumps(list(go_terms), indent=2))
     return output_json_path
-
-
-def load_go_vocab(input_json_path: str | Path) -> list[str]:
-    input_json_path = Path(input_json_path).resolve()
-    return list(json.loads(input_json_path.read_text()))
-
 
 def build_diamond_database(
     training_fasta_path: str | Path,
@@ -251,7 +201,6 @@ def build_diamond_database(
     logger.info("Running DIAMOND makedb")
     _run_subprocess(cmd)
     return db_prefix.with_suffix(".dmnd")
-
 
 def run_diamond_blastp(
     query_fasta_path: str | Path,
@@ -303,8 +252,162 @@ def run_diamond_blastp(
     _run_subprocess(cmd)
     return output_tsv_path
 
+def build_aligned_homology_shards(
+    manifest_path: str | Path,
+    diamond_tsv_path: str | Path,
+    subject_go_index_json_path: str | Path,
+    go_vocab_json_path: str | Path,
+    output_dir: str | Path,
+    config: DiamondSearchConfig,
+    *,
+    exclude_self_hits: bool = False,
+    use_fp16: bool = False,
+    keep_debug_hits: bool = True,
+) -> Path:
+    """
+    Build homology shards aligned 1:1 with the ESM shards and local indices.
 
-def parse_diamond_hits(tsv_path: str | Path) -> dict[str, list[HomologyHit]]:
+      homology_shard_{k:04d}.pt["priors"][i]
+      corresponds to
+      esm shard part_{k:04d}.pt["representations"][i]
+
+    Each shard stores:
+      - priors[i]: (num_go_terms,) tensor
+      - gate_features[i]: tensor([b_max, cov_max, log1p_n_hits, has_hit])
+      - stats[i]: dict with raw retrieval stats
+      - debug_hits[i]: optional retained-hit summaries
+      - labels[i]: manifest label
+    """
+    manifest_rows = _load_manifest_rows(manifest_path)
+    hits_by_query = _parse_diamond_hits(diamond_tsv_path)
+    subject_to_go_indices = _load_subject_go_index(subject_go_index_json_path)
+    go_vocab = _load_go_vocab(go_vocab_json_path)
+    num_go_terms = len(go_vocab)
+
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    rows_by_shard: dict[int, list[dict]] = defaultdict(list)
+    for row in manifest_rows:
+        rows_by_shard[row["shard_number"]].append(row)
+
+    num_queries = 0
+    num_with_hits = 0
+
+    for shard_id in sorted(rows_by_shard):
+        rows = sorted(rows_by_shard[shard_id], key=lambda r: r["local_seq_idx"])
+        expected = list(range(len(rows)))
+        observed = [row["local_seq_idx"] for row in rows]
+        if observed != expected:
+            raise ValueError(
+                f"Shard {shard_id} local_seq_idx mismatch. "
+                f"Expected {expected[:5]}..., got {observed[:5]}..."
+            )
+
+        priors: list[torch.Tensor] = []
+        gate_features: list[torch.Tensor] = []
+        stats_records: list[dict] = []
+        debug_hits_records: list[list[dict] | None] = []
+        labels: list[str] = []
+
+        for row in rows:
+            label = row["label"]
+            query_hits = hits_by_query.get(label, [])
+            retained = _retain_valid_hits(
+                query_hits,
+                config,
+                exclude_self=exclude_self_hits,
+                query_id=label,
+            )
+            prior, stats, debug_hits = _build_prior_from_hits(
+                hits=retained,
+                subject_to_go_indices=subject_to_go_indices,
+                num_go_terms=num_go_terms,
+            )
+
+            if use_fp16:
+                prior = prior.half()
+
+            priors.append(prior)
+            gate_features.append(stats.as_gate_features())
+            stats_records.append(asdict(stats))
+            debug_hits_records.append(debug_hits if keep_debug_hits else None)
+            labels.append(label)
+
+            num_queries += 1
+            if stats.has_hit > 0:
+                num_with_hits += 1
+
+        shard_path = output_dir / f"homology_shard_{shard_id:04d}.pt"
+        torch.save(
+            {
+                "priors": priors,
+                "gate_features": gate_features,
+                "stats": stats_records,
+                "debug_hits": debug_hits_records,
+                "labels": labels,
+                "num_go_terms": num_go_terms,
+            },
+            shard_path,
+        )
+
+    metadata = {
+        "num_queries": num_queries,
+        "num_queries_with_hits": num_with_hits,
+        "hit_rate": (num_with_hits / max(num_queries, 1)),
+        "num_go_terms": num_go_terms,
+        "config": asdict(config),
+        "aligned_to": "ESM manifest shard_number/local_seq_idx order",
+    }
+    metadata_path = output_dir / "homology_shard_metadata.json"
+    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True))
+    return metadata_path
+
+
+def _load_manifest_rows(manifest_path: str | Path) -> list[dict]:
+    """Load the ESM manifest in row order."""
+    manifest_path = Path(manifest_path).resolve()
+    rows: list[dict] = []
+
+    with manifest_path.open("r", newline="") as handle:
+        reader = csv.DictReader(handle)
+        missing = MANIFEST_REQUIRED_COLUMNS - set(reader.fieldnames or [])
+        if missing:
+            raise ValueError(f"Manifest missing required columns: {sorted(missing)}")
+
+        for row in reader:
+            rows.append(
+                {
+                    "shard_number": int(row["shard_number"]),
+                    "local_seq_idx": int(row["local_seq_idx"]),
+                    "global_seq_idx": int(row["global_seq_idx"]),
+                    "label": row["label"],
+                    "sequence_length": int(row["sequence_length"]),
+                    "truncated_length": int(row["truncated_length"]),
+                }
+            )
+
+    return rows
+
+
+def _load_subject_go_index(input_json_path: str | Path) -> dict[str, torch.Tensor]:
+    """
+    Load label -> GO index lists and convert them to CPU LongTensors for fast updates.
+    """
+    input_json_path = Path(input_json_path).resolve()
+    raw = json.loads(input_json_path.read_text())
+    return {
+        label: torch.tensor(indices, dtype=torch.long)
+        for label, indices in raw.items()
+    }
+
+
+def _load_go_vocab(input_json_path: str | Path) -> list[str]:
+    input_json_path = Path(input_json_path).resolve()
+    return list(json.loads(input_json_path.read_text()))
+
+
+def _parse_diamond_hits(tsv_path: str | Path) -> dict[str, list[HomologyHit]]:
     """
     Parse DIAMOND TSV output and keep only the best row per (query, subject).
 
@@ -347,7 +450,7 @@ def parse_diamond_hits(tsv_path: str | Path) -> dict[str, list[HomologyHit]]:
     return dict(hits_by_query)
 
 
-def retain_valid_hits(
+def _retain_valid_hits(
     hits: Sequence[HomologyHit],
     config: DiamondSearchConfig,
     *,
@@ -375,7 +478,7 @@ def retain_valid_hits(
     return valid[: config.top_k]
 
 
-def build_prior_from_hits(
+def _build_prior_from_hits(
     hits: Sequence[HomologyHit],
     subject_to_go_indices: Mapping[str, torch.Tensor],
     num_go_terms: int,
@@ -435,257 +538,6 @@ def build_prior_from_hits(
         has_hit=1.0,
     )
     return prior, stats, retained_hits_debug
-
-
-def build_aligned_homology_shards(
-    manifest_path: str | Path,
-    diamond_tsv_path: str | Path,
-    subject_go_index_json_path: str | Path,
-    go_vocab_json_path: str | Path,
-    output_dir: str | Path,
-    config: DiamondSearchConfig,
-    *,
-    exclude_self_hits: bool = False,
-    use_fp16: bool = False,
-    keep_debug_hits: bool = True,
-) -> Path:
-    """
-    Build homology shards aligned 1:1 with the ESM shards and local indices.
-
-      homology_shard_{k:04d}.pt["priors"][i]
-      corresponds to
-      esm shard part_{k:04d}.pt["representations"][i]
-
-    Each shard stores:
-      - priors[i]: (num_go_terms,) tensor
-      - gate_features[i]: tensor([b_max, cov_max, log1p_n_hits, has_hit])
-      - stats[i]: dict with raw retrieval stats
-      - debug_hits[i]: optional retained-hit summaries
-      - labels[i]: manifest label
-    """
-    manifest_rows = load_manifest_rows(manifest_path)
-    hits_by_query = parse_diamond_hits(diamond_tsv_path)
-    subject_to_go_indices = load_subject_go_index(subject_go_index_json_path)
-    go_vocab = load_go_vocab(go_vocab_json_path)
-    num_go_terms = len(go_vocab)
-
-    output_dir = Path(output_dir).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    rows_by_shard: dict[int, list[dict]] = defaultdict(list)
-    for row in manifest_rows:
-        rows_by_shard[row["shard_number"]].append(row)
-
-    num_queries = 0
-    num_with_hits = 0
-
-    for shard_id in sorted(rows_by_shard):
-        rows = sorted(rows_by_shard[shard_id], key=lambda r: r["local_seq_idx"])
-        expected = list(range(len(rows)))
-        observed = [row["local_seq_idx"] for row in rows]
-        if observed != expected:
-            raise ValueError(
-                f"Shard {shard_id} local_seq_idx mismatch. "
-                f"Expected {expected[:5]}..., got {observed[:5]}..."
-            )
-
-        priors: list[torch.Tensor] = []
-        gate_features: list[torch.Tensor] = []
-        stats_records: list[dict] = []
-        debug_hits_records: list[list[dict] | None] = []
-        labels: list[str] = []
-
-        for row in rows:
-            label = row["label"]
-            query_hits = hits_by_query.get(label, [])
-            retained = retain_valid_hits(
-                query_hits,
-                config,
-                exclude_self=exclude_self_hits,
-                query_id=label,
-            )
-            prior, stats, debug_hits = build_prior_from_hits(
-                hits=retained,
-                subject_to_go_indices=subject_to_go_indices,
-                num_go_terms=num_go_terms,
-            )
-
-            if use_fp16:
-                prior = prior.half()
-
-            priors.append(prior)
-            gate_features.append(stats.as_gate_features())
-            stats_records.append(asdict(stats))
-            debug_hits_records.append(debug_hits if keep_debug_hits else None)
-            labels.append(label)
-
-            num_queries += 1
-            if stats.has_hit > 0:
-                num_with_hits += 1
-
-        shard_path = output_dir / f"homology_shard_{shard_id:04d}.pt"
-        torch.save(
-            {
-                "priors": priors,
-                "gate_features": gate_features,
-                "stats": stats_records,
-                "debug_hits": debug_hits_records,
-                "labels": labels,
-                "num_go_terms": num_go_terms,
-            },
-            shard_path,
-        )
-
-    metadata = {
-        "num_queries": num_queries,
-        "num_queries_with_hits": num_with_hits,
-        "hit_rate": (num_with_hits / max(num_queries, 1)),
-        "num_go_terms": num_go_terms,
-        "config": asdict(config),
-        "aligned_to": "ESM manifest shard_number/local_seq_idx order",
-    }
-    metadata_path = output_dir / "homology_shard_metadata.json"
-    metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True))
-    return metadata_path
-
-
-class HomologyShardDataset(torch.utils.data.Dataset):
-    """
-    Lightweight loader for aligned homology shards.
-
-    Returns:
-        {
-            "prior": (K,) tensor,
-            "homology_gate": (4,) tensor  # [b_max, cov_max, log1p_n_hits, has_hit]
-            "stats": dict,
-            "label": str,
-            "global_idx": int,
-        }
-    """
-
-    def __init__(
-        self,
-        homology_shard_dir: str | Path,
-        manifest_path: str | Path,
-        cache_size: int = 4,
-    ) -> None:
-        self.homology_shard_dir = Path(homology_shard_dir).resolve()
-        self.manifest_path = Path(manifest_path).resolve()
-        self.cache_size = cache_size
-
-        if not self.homology_shard_dir.exists():
-            raise FileNotFoundError(f"Missing homology shard dir: {self.homology_shard_dir}")
-        if not self.manifest_path.exists():
-            raise FileNotFoundError(f"Missing manifest path: {self.manifest_path}")
-
-        self.shard_files = {
-            int(path.stem.split("_")[-1]): path
-            for path in sorted(self.homology_shard_dir.glob("homology_shard_*.pt"))
-        }
-        if not self.shard_files:
-            raise FileNotFoundError(f"No homology shard files found in {self.homology_shard_dir}")
-
-        self.index: list[tuple[int, int, int, str]] = []
-        self.lengths: list[int] = []
-        self.indices_by_shard: dict[int, list[int]] = defaultdict(list)
-        manifest_rows = load_manifest_rows(self.manifest_path)
-        for dataset_idx, row in enumerate(manifest_rows):
-            shard_id = row["shard_number"]
-            local_idx = row["local_seq_idx"]
-            global_idx = row["global_seq_idx"]
-            label = row["label"]
-            seq_len = row["sequence_length"]
-
-            self.index.append((shard_id, local_idx, global_idx, label))
-            self.lengths.append(seq_len)
-            self.indices_by_shard[shard_id].append(dataset_idx)
-
-        self._cache: dict[int, dict] = {}
-        self._cache_order: list[int] = []
-
-    def __len__(self) -> int:
-        return len(self.index)
-
-    def _load_shard(self, shard_id: int) -> dict:
-        if shard_id in self._cache:
-            self._cache_order.remove(shard_id)
-            self._cache_order.append(shard_id)
-            return self._cache[shard_id]
-
-        shard = torch.load(self.shard_files[shard_id], map_location="cpu")
-        self._cache[shard_id] = shard
-        self._cache_order.append(shard_id)
-
-        while len(self._cache_order) > self.cache_size:
-            old_shard_id = self._cache_order.pop(0)
-            self._cache.pop(old_shard_id, None)
-
-        return shard
-
-    def __getitem__(self, idx: int) -> dict:
-        shard_id, local_idx, global_idx, label = self.index[idx]
-        shard = self._load_shard(shard_id)
-        return {
-            "prior": shard["priors"][local_idx],
-            "homology_gate": shard["gate_features"][local_idx],
-            "stats": shard["stats"][local_idx],
-            "label": label,
-            "global_idx": global_idx,
-        }
-
-
-class ProbabilitySpaceFusionHead(nn.Module):
-    """
-    Reliability-aware probability fusion.
-
-    Inputs:
-        neural_logits: (B, K) raw neural logits
-        homology_prior: (B, K) probability-like retrieval prior
-        gate_features: (B, Q) full reliability vector q
-                      e.g. [mu_c, sigma_c, f_coord, b_max, cov_max, log1p_n_hits, has_hit, source, r_pdb]
-
-    Output:
-        final_prob: (B, K)
-    """
-
-    def __init__(self, gate_input_dim: int, gate_hidden_dim: int = 32, gate_dropout: float = 0.1):
-        super().__init__()
-        self.gate_mlp = nn.Sequential(
-            nn.Linear(gate_input_dim, gate_hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(gate_dropout),
-            nn.Linear(gate_hidden_dim, 2),
-        )
-
-    def forward(
-        self,
-        neural_logits: torch.Tensor,
-        homology_prior: torch.Tensor,
-        gate_features: torch.Tensor,
-    ) -> dict[str, torch.Tensor]:
-        if neural_logits.shape != homology_prior.shape:
-            raise ValueError(
-                f"Shape mismatch: neural_logits={tuple(neural_logits.shape)} "
-                f"but homology_prior={tuple(homology_prior.shape)}"
-            )
-
-        gate_logits = self.gate_mlp(gate_features)
-        alphas = torch.softmax(gate_logits, dim=-1)  # (B, 2)
-
-        neural_prob = torch.sigmoid(neural_logits)
-        final_prob = (
-            alphas[:, 0:1] * neural_prob
-            + alphas[:, 1:2] * homology_prior
-        )
-
-        return {
-            "final_prob": final_prob,
-            "neural_prob": neural_prob,
-            "homology_prior": homology_prior,
-            "alphas": alphas,
-            "gate_logits": gate_logits,
-        }
-
 
 def _hit_is_better(current: HomologyHit, previous: HomologyHit) -> bool:
     """
