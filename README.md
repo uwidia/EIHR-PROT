@@ -22,7 +22,7 @@ NOTE:⚠️ **This repository is still under active development.**
 
 The preprocessing and representation-building stages are already implemented. That includes structure download and cleanup, cleaned FASTA generation, per-residue ESM embedding extraction into shards, manifest creation, graph shard construction aligned to the ESM shards, and sequence-side scalar attention pooling. 
 
-The full end-to-end multimodal predictor is **not finished yet**. The homology prior integration, reliability gate, and final GO classifier are still in progress. The current codebase should be read as a research pipeline under construction rather than a finished training framework.
+The full end-to-end multimodal predictor is **not finished yet**. The Final GO classifier is still in progress. The current codebase should be read as a research pipeline under construction rather than a finished training framework.
 
 ---
 
@@ -66,13 +66,17 @@ The full end-to-end multimodal predictor is **not finished yet**. The homology p
   - retrieves graph object from dataloader
   - passes through a 2-layer GAT2conv network to obtain graph representation
   - implements confidence weighted attention pooling on graph representation
-- **sequence + structure fusion via concatenation + MLP**
+- **Sequence + structure fusion via concatenation + MLP**
   - Sequence and structure representations fused with simple concatenation and passed through a single layer MLP
+- **Incorporation of homology prior branch**
+  - Homology prior branch is added to the fused Seq+Structure branch along with external reliabiity signals which will be passed to the gate. 
+- **Reliability gate over fused embeddings and homology prior scores**
+  - Reliability gate produces a scalar weight corresponding to fused embeddings and homology prior scores
+  - Homology probability-like scores  are multiplied by their scalar reliability-weight and fused with weighted probability-like scores from Seq+Struct" 
 
 ---
 ### Planned
-- incorporation of homology prior branch
-- reliability gate over fused embeddings and homology logits
+
 - final GO term classifier
 - end-to-end training and evaluation scripts
 - baseline comparisons and ablations
@@ -86,6 +90,7 @@ The full end-to-end multimodal predictor is **not finished yet**. The homology p
 * **Python 3.11**
 * **CUDA 11.8 / cu118**
 * **uv** for dependency management and reproducible environments
+* **DIAMOND v2.1.24** for building database and performing quick sequence alignments
 
 This project uses uv for environment management and to ensure reproducibility. I recommend you install `uv`, install Python 3.11, sync the locked environment, and run project scripts with `uv run`.
 
@@ -129,7 +134,9 @@ uv sync
 ```bash
 uv run python --version
 ```
-
+### 6. DIAMOND Installation
+To run DIAMOND and obtain homology priors, [download the compatible DIAMONDv2.1.24 release](https://github.com/bbuchfink/diamond/releases) for your operating system. 
+NOTE: After download, save Diamond.exe to your project root directory. 
 ---
 
 ## How to Run
