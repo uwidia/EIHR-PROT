@@ -20,6 +20,86 @@ ROOT_TERMS = {
     "CC": "GO:0005575",
 }
 
+def build_go_annotations_list(
+    tsv_path: str | Path,
+    obo_path: str | Path,
+    go_aspect: str,
+    *,
+    keep_ids: Iterable[str] | None = None,
+    remove_root_term: bool = True,
+    min_term_freq: int | None = None,
+) -> tuple[dict[str, list[str]], list[str]]:
+    """
+    Build:
+        label_to_go_terms: dict[str, list[str]]
+        go_terms: list[str]
+
+    Workflow:
+      1) parse direct terms from TSV for a chosen go_aspect
+      2) propagate using GOATOOLS
+      3) optionally remove ontology root term
+      4) optionally filter rare terms by training frequency
+      5) return sorted per-protein terms and sorted global vocabulary
+    """
+    go_aspect = go_aspect.upper()
+    if go_aspect not in {"BP", "MF", "CC"}:
+        raise ValueError("go_aspect must be one of: 'BP', 'MF', 'CC'")
+
+    go_dag = GODag(str(obo_path), optional_attrs={"relationship"})
+
+    # Parse direct annotations from TSV
+    label_to_direct = _extract_go_terms(
+        tsv_path=tsv_path,
+        go_aspect=go_aspect,
+        keep_ids=keep_ids,
+    )
+
+    # Propagate GO terms
+    label_to_propagated: dict[str, set[str]] = {}
+    for protein_id, direct_terms in label_to_direct.items():
+        propagated = _propagate_terms_with_goatools(direct_terms, go_dag)
+
+        # Keep only terms that truly belong to the requested go_aspect
+        filtered = {
+            go_id
+            for go_id in propagated
+            if go_id in go_dag and go_dag[go_id].namespace == {
+                "BP": "biological_process",
+                "MF": "molecular_function",
+                "CC": "cellular_component",
+            }[go_aspect]
+        }
+
+        if remove_root_term:
+            filtered.discard(ROOT_TERMS[go_aspect])
+
+        label_to_propagated[protein_id] = filtered
+
+    # Frequency filter
+    if min_term_freq is not None and min_term_freq > 1:
+        term_counts: dict[str, int] = {}
+        for terms in label_to_propagated.values():
+            for go_id in terms:
+                term_counts[go_id] = term_counts.get(go_id, 0) + 1
+
+        keep_terms = {go_id for go_id, c in term_counts.items() if c >= min_term_freq}
+
+        for protein_id in label_to_propagated:
+            label_to_propagated[protein_id] &= keep_terms
+
+    # Sort per protein and build sorted vocabulary
+    label_to_go_terms = {
+        protein_id: sorted(terms)
+        for protein_id, terms in label_to_propagated.items()
+    }
+
+    go_terms = sorted({
+        go_id
+        for terms in label_to_go_terms.values()
+        for go_id in terms
+    })
+
+    return label_to_go_terms, go_terms
 
 def _extract_go_terms(
     tsv_path: str | Path,
@@ -27,10 +107,10 @@ def _extract_go_terms(
     keep_ids: Iterable[str] | None = None,
 ) -> dict[str, set[str]]:
     """
-    Parse your TSV and return:
+    Parse TSV and return:
         protein_id -> direct GO terms for one go_aspect only
 
-    The TSV is expected to contain a header line like:
+    The TSV contains a header line in the format:
     ### PDB-chain    GO-terms (molecular_function)    GO-terms (biological_process)    GO-terms (cellular_component)
     """
     go_aspect = go_aspect.upper()
@@ -102,85 +182,3 @@ def _propagate_terms_with_goatools(
         propagated.update(ancestors)
 
     return propagated
-
-
-def build_go_annotations_list(
-    tsv_path: str | Path,
-    obo_path: str | Path,
-    go_aspect: str,
-    *,
-    keep_ids: Iterable[str] | None = None,
-    remove_root_term: bool = True,
-    min_term_freq: int | None = None,
-) -> tuple[dict[str, list[str]], list[str]]:
-    """
-    Build:
-        label_to_go_terms: dict[str, list[str]]
-        go_terms: list[str]
-
-    Workflow:
-      1) parse direct terms from TSV for a chosen go_aspect
-      2) propagate using GOATOOLS
-      3) optionally remove ontology root term
-      4) optionally filter rare terms by training frequency
-      5) return sorted per-protein terms and sorted global vocabulary
-    """
-    go_aspect = go_aspect.upper()
-    if go_aspect not in {"BP", "MF", "CC"}:
-        raise ValueError("go_aspect must be one of: 'BP', 'MF', 'CC'")
-
-    go_dag = GODag(str(obo_path), optional_attrs={"relationship"})
-
-    # Step 1: parse direct annotations from TSV
-    label_to_direct = _extract_go_terms(
-        tsv_path=tsv_path,
-        go_aspect=go_aspect,
-        keep_ids=keep_ids,
-    )
-
-    # Step 2: propagate
-    label_to_propagated: dict[str, set[str]] = {}
-    for protein_id, direct_terms in label_to_direct.items():
-        propagated = _propagate_terms_with_goatools(direct_terms, go_dag)
-
-        # Keep only terms that truly belong to the requested go_aspect
-        filtered = {
-            go_id
-            for go_id in propagated
-            if go_id in go_dag and go_dag[go_id].namespace == {
-                "BP": "biological_process",
-                "MF": "molecular_function",
-                "CC": "cellular_component",
-            }[go_aspect]
-        }
-
-        if remove_root_term:
-            filtered.discard(ROOT_TERMS[go_aspect])
-
-        label_to_propagated[protein_id] = filtered
-
-    # Step 3: optional frequency filter
-    if min_term_freq is not None and min_term_freq > 1:
-        term_counts: dict[str, int] = {}
-        for terms in label_to_propagated.values():
-            for go_id in terms:
-                term_counts[go_id] = term_counts.get(go_id, 0) + 1
-
-        keep_terms = {go_id for go_id, c in term_counts.items() if c >= min_term_freq}
-
-        for protein_id in label_to_propagated:
-            label_to_propagated[protein_id] &= keep_terms
-
-    # Step 4: sort per protein and build sorted vocabulary
-    label_to_go_terms = {
-        protein_id: sorted(terms)
-        for protein_id, terms in label_to_propagated.items()
-    }
-
-    go_terms = sorted({
-        go_id
-        for terms in label_to_go_terms.values()
-        for go_id in terms
-    })
-
-    return label_to_go_terms, go_terms
