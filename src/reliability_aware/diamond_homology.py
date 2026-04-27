@@ -4,6 +4,7 @@ import json
 import logging
 import math
 import subprocess
+from reliability_aware.go_term_extraction import build_subject_go_index, save_subject_go_index
 from collections import defaultdict
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -137,37 +138,7 @@ def write_fasta_from_ids(
 
     return output_fasta_path
 
-def build_subject_go_index(
-    label_to_go_terms: Mapping[str, Sequence[str]],
-    go_term_to_idx: Mapping[str, int],
-) -> dict[str, list[int]]:
-    """
-    Convert label -> GO term strings into label -> sorted GO index lists.
-    """
-    subject_to_indices: dict[str, list[int]] = {}
 
-    for label, go_terms in label_to_go_terms.items():
-        indices = sorted(
-            {
-                go_term_to_idx[go_term]
-                for go_term in go_terms
-                if go_term in go_term_to_idx
-            }
-        )
-        subject_to_indices[label] = indices
-
-    return subject_to_indices
-
-
-def save_subject_go_index(
-    subject_to_indices: Mapping[str, Sequence[int]],
-    output_json_path: str | Path,
-) -> Path:
-    output_json_path = Path(output_json_path).resolve()
-    output_json_path.parent.mkdir(parents=True, exist_ok=True)
-    serializable = {key: list(value) for key, value in subject_to_indices.items()}
-    output_json_path.write_text(json.dumps(serializable, indent=2, sort_keys=True))
-    return output_json_path
 
 def save_go_vocab(go_terms: Sequence[str], output_json_path: str | Path) -> Path:
     output_json_path = Path(output_json_path).resolve()
