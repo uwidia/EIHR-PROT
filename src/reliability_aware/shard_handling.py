@@ -9,6 +9,36 @@ from torch.utils.data import Dataset
 from collections import OrderedDict, defaultdict
 import copy
 
+def filter_index_by_keep_ids(index, lengths, keep_ids):
+    """
+    Filter dataset index to only labels in keep_ids.
+    Preserves shard_id/local_idx so shard alignment is not broken.
+    """
+    if keep_ids is None:
+        indices_by_shard = defaultdict(list)
+        for dataset_idx, (shard_id, *_rest) in enumerate(index):
+            indices_by_shard[shard_id].append(dataset_idx)
+        return index, lengths, indices_by_shard
+
+    keep_ids = set(keep_ids)
+
+    new_index = []
+    new_lengths = []
+    new_indices_by_shard = defaultdict(list)
+
+    for old_idx, (record, seq_len) in enumerate(zip(index, lengths)):
+        shard_id, local_idx, global_idx, label = record
+
+        if label not in keep_ids:
+            continue
+
+        new_dataset_idx = len(new_index)
+        new_index.append(record)
+        new_lengths.append(seq_len)
+        new_indices_by_shard[shard_id].append(new_dataset_idx)
+
+    return new_index, new_lengths, new_indices_by_shard
+
 class ESMGraphHomologyShardDataset(Dataset):
     def __init__(
         self,
@@ -16,6 +46,7 @@ class ESMGraphHomologyShardDataset(Dataset):
         graph_shard_dir: str,
         homology_shard_dir: str,
         manifest_path: str,
+        keep_ids = None,
         require_graph: bool = True,
     ):
         self.seq_graph_ds = ESMGraphShardDataset(
@@ -23,14 +54,19 @@ class ESMGraphHomologyShardDataset(Dataset):
             graph_shard_dir=graph_shard_dir,
             manifest_path=manifest_path,
             require_graph=require_graph,
+            keep_ids = keep_ids,
         )
         self.homology_ds = HomologyShardDataset(
             homology_shard_dir=homology_shard_dir,
             manifest_path=manifest_path,
+            keep_ids = keep_ids,
         )
 
         if len(self.seq_graph_ds) != len(self.homology_ds):
             raise ValueError("Dataset length mismatch between seq+graph and homology datasets.")
+        
+        self.lengths = self.seq_graph_ds.lengths
+        self.indices_by_shard = self.seq_graph_ds.indices_by_shard
 
     def __len__(self):
         return len(self.seq_graph_ds)
@@ -79,6 +115,7 @@ class ESMGraphShardDataset(Dataset):
         esm_cache_size: int = 2,
         graph_cache_size: int = 4,
         require_graph: bool = True,
+        keep_ids = None,
     ):
         self.esm_shard_dir = Path(esm_shard_dir).resolve()
         self.graph_shard_dir = Path(graph_shard_dir).resolve()
@@ -114,6 +151,7 @@ class ESMGraphShardDataset(Dataset):
         self.lengths = []
         self.indices_by_shard = defaultdict(list)
 
+
         with open(self.manifest_path, "r") as f:
             reader = csv.DictReader(f)
             required = {"shard_number", "local_seq_idx", "global_seq_idx", "label", "sequence_length"}
@@ -131,7 +169,11 @@ class ESMGraphShardDataset(Dataset):
                 self.index.append((shard_id, local_idx, global_idx, label))
                 self.lengths.append(seq_len)
                 self.indices_by_shard[shard_id].append(dataset_idx)
-
+        self.index, self.lengths, self.indices_by_shard = filter_index_by_keep_ids(
+            self.index,
+            self.lengths,
+            keep_ids,
+            )
         self._esm_cache = OrderedDict()
         self._graph_cache = OrderedDict()
         self._validated_esm_shards = set()
@@ -291,6 +333,7 @@ class HomologyShardDataset(torch.utils.data.Dataset):
         homology_shard_dir: str | Path,
         manifest_path: str | Path,
         cache_size: int = 4,
+        keep_ids = None,
     ) -> None:
         self.homology_shard_dir = Path(homology_shard_dir).resolve()
         self.manifest_path = Path(manifest_path).resolve()
@@ -311,6 +354,7 @@ class HomologyShardDataset(torch.utils.data.Dataset):
         self.index: list[tuple[int, int, int, str]] = []
         self.lengths: list[int] = []
         self.indices_by_shard: dict[int, list[int]] = defaultdict(list)
+
         manifest_rows = load_manifest_rows(self.manifest_path)
         for dataset_idx, row in enumerate(manifest_rows):
             shard_id = row["shard_number"]
@@ -322,6 +366,11 @@ class HomologyShardDataset(torch.utils.data.Dataset):
             self.index.append((shard_id, local_idx, global_idx, label))
             self.lengths.append(seq_len)
             self.indices_by_shard[shard_id].append(dataset_idx)
+        self.index, self.lengths, self.indices_by_shard = filter_index_by_keep_ids(
+            self.index,
+            self.lengths,
+            keep_ids,
+            )
 
         self._cache: dict[int, dict] = {}
         self._cache_order: list[int] = []
