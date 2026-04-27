@@ -6,8 +6,10 @@ from collections import deque
 import random
 import logging
 from torch_geometric.data import Data, Batch
+from reliability_aware.go_term_extraction import build_go_annotations_list
 
 logger = logging.getLogger(__name__)
+GO_ASPECT = "BP"
 
 class ReliabilityAwareProteinFunctionModel(nn.Module):
     """
@@ -30,7 +32,7 @@ class ReliabilityAwareProteinFunctionModel(nn.Module):
         self,
         seq_branch: nn.Module,
         gat_branch: nn.Module,
-        num_classes: int,
+        num_go_terms: int,
         fusion_hidden_dim: int = 1024,
         fusion_out_dim: int = 512,
         gate_q_dim: int = 8,
@@ -52,7 +54,7 @@ class ReliabilityAwareProteinFunctionModel(nn.Module):
 
         self.neural_head = NeuralLogitHead(
             in_dim=fusion_out_dim,
-            num_classes=num_classes,
+            num_go_terms=num_go_terms,
             dropout=dropout,
         )
 
@@ -103,6 +105,7 @@ class ReliabilityAwareProteinFunctionModel(nn.Module):
 
         fused_probs = alpha_n * neural_probs + alpha_h * homology_scores
 
+        
         return {
             "fused_probs": fused_probs,
             "neural_logits": neural_logits,
@@ -235,80 +238,102 @@ class HybridBatchSampler(Sampler):
 
             yield batch
 
-def multimodal_collate_fn(batch):
-    reps = [item["rep"] for item in batch]
-    graphs = [item["graph"] for item in batch]
-    labels = [item["label"] for item in batch]
-    global_indices = torch.tensor([item["global_idx"] for item in batch], dtype=torch.long)
+def build_multihot_target_lookup(label_to_go_terms, go_terms):
+    go_to_idx = {go: i for i, go in enumerate(go_terms)}
+    num_terms = len(go_terms)
 
-    # Pad sequence reps
-    lengths = [r.shape[0] for r in reps]
-    max_len = max(lengths)
-    dim = reps[0].shape[1]
-    dtype = reps[0].dtype
+    label_to_target = {}
 
-    padded = torch.zeros(len(reps), max_len, dim, dtype=dtype)
-    mask = torch.zeros(len(reps), max_len, dtype=torch.bool)
+    for label, terms in label_to_go_terms.items():
+        y = torch.zeros(num_terms, dtype=torch.float32)
 
-    for i, r in enumerate(reps):
-        L = r.shape[0]
-        padded[i, :L] = r
-        mask[i, :L] = True
+        idxs = [go_to_idx[t] for t in terms if t in go_to_idx]
+        if idxs:
+            y[idxs] = 1.0
 
-    # Build graph batch
-    pyg_graphs = []
-    homology_priors = []
-    gate_features = []
+        label_to_target[label] = y
 
-    for item, rep, graph, label in zip(batch, reps, graphs, labels):
-        if graph is None:
-            raise ValueError(f"Graph is None for label={label}")
+    return label_to_target
 
-        if rep.shape[0] != graph["coords"].shape[0]:
-            raise ValueError(
-                f"Length mismatch for {label}: rep has {rep.shape[0]} residues, "
-                f"graph has {graph['coords'].shape[0]}"
+def multimodal_collate_fn_generator(label_to_indices, num_go_terms):
+    def multimodal_collate_fn(batch):
+        reps = [item["rep"] for item in batch]
+        graphs = [item["graph"] for item in batch]
+        labels = [item["label"] for item in batch]
+        global_indices = torch.tensor([item["global_idx"] for item in batch], dtype=torch.long)
+
+        lengths = [r.shape[0] for r in reps]
+        max_len = max(lengths)
+        dim = reps[0].shape[1]
+        dtype = reps[0].dtype
+
+        padded = torch.zeros(len(reps), max_len, dim, dtype=dtype)
+        mask = torch.zeros(len(reps), max_len, dtype=torch.bool)
+
+        for i, r in enumerate(reps):
+            L = r.shape[0]
+            padded[i, :L] = r
+            mask[i, :L] = True
+
+        pyg_graphs = []
+        homology_priors = []
+        gate_features = []
+
+        targets = torch.zeros(len(batch), num_go_terms, dtype=torch.float32)
+
+        for i, (item, rep, graph, label) in enumerate(zip(batch, reps, graphs, labels)):
+            if graph is None:
+                raise ValueError(f"Graph is None for label={label}")
+
+            if rep.shape[0] != graph["coords"].shape[0]:
+                raise ValueError(
+                    f"Length mismatch for {label}: rep has {rep.shape[0]} residues, "
+                    f"graph has {graph['coords'].shape[0]}"
+                )
+
+            edge_attr = torch.cat(
+                [
+                    graph["edge_attr"].float(),
+                    graph["edge_weight"].float().unsqueeze(1),
+                ],
+                dim=1,
             )
 
-        edge_attr = torch.cat(
-            [
-                graph["edge_attr"].float(),
-                graph["edge_weight"].float().unsqueeze(1),
-            ],
-            dim=1,
-        )
+            data = Data(
+                x=rep.float(),
+                confidence=graph["confidence"].float(),
+                edge_index=graph["edge_index"].long(),
+                edge_attr=edge_attr,
+                label=label,
+            )
+            pyg_graphs.append(data)
 
-        data = Data(
-            x=rep.float(),                              # (L, 1280)
-            confidence=graph["confidence"].float(),    # (L,)
-            edge_index=graph["edge_index"].long(),
-            edge_attr=edge_attr,                       # (E, 5)
-            label=label,
-        )
-        pyg_graphs.append(data)
+            homology_priors.append(item["homology_prior"].float())
 
-        # homology prior
-        homology_priors.append(item["homology_prior"].float())
+            mean_conf = torch.tensor(float(graph["mean_confidence"]), dtype=torch.float32)
+            std_conf = torch.tensor(float(graph["std_confidence"]), dtype=torch.float32)
+            coverage = torch.tensor(float(graph["coverage"]), dtype=torch.float32)
 
-        # graph-side reliability features
-        mean_conf = torch.tensor(float(graph["mean_confidence"]), dtype=torch.float32)
-        std_conf = torch.tensor(float(graph["std_confidence"]), dtype=torch.float32)
-        coverage = torch.tensor(float(graph["coverage"]), dtype=torch.float32)
+            resolution = graph["resolution"]
+            r_pdb = 0.0 if resolution is None else float(resolution)
+            r_pdb = torch.tensor([r_pdb], dtype=torch.float32)
 
+            graph_q = torch.stack([mean_conf, std_conf, coverage])
+            homology_q = item["homology_gate"].float()
 
-        resolution = graph["resolution"]
-        r_pdb = 0.0 if resolution is None else float(resolution)
-        r_pdb = torch.tensor(r_pdb, dtype=torch.float32)
+            q = torch.cat([graph_q, homology_q, r_pdb], dim=0)
+            gate_features.append(q)
 
-        graph_q = torch.stack([mean_conf, std_conf, coverage])              # 3
-        homology_q = item["homology_gate"].float()                          # 4
-                                     # 2
+            idxs = label_to_indices.get(label)
+            if idxs is None:
+                raise KeyError(f"No GO target found for label={label}")
+            if idxs:
+                targets[i, idxs] = 1.0
 
-        q = torch.cat([graph_q, homology_q, r_pdb], dim=0)                  #8
-        gate_features.append(q)
+        graph_batch = Batch.from_data_list(pyg_graphs)
+        homology_priors = torch.stack(homology_priors, dim=0)
+        gate_features = torch.stack(gate_features, dim=0)
 
-    graph_batch = Batch.from_data_list(pyg_graphs)
-    homology_priors = torch.stack(homology_priors, dim=0)   # (B, C)
-    gate_features = torch.stack(gate_features, dim=0)       # (B, 8)
+        return padded, mask, graph_batch, homology_priors, gate_features, targets, global_indices, labels
 
-    return padded, mask, graph_batch, homology_priors, gate_features, global_indices, labels
+    return multimodal_collate_fn
