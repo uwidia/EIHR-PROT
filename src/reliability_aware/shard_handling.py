@@ -177,7 +177,7 @@ class ESMGraphShardDataset(Dataset):
                 raise TypeError(f"{shard_file}: graph entry must be dict or None")
             required_keys = {
                 "coords", "edge_index", "edge_attr", "edge_weight",
-                "has_structure", "confidence",
+                "has_structure", "confidence_proxy",
                 "coverage", "mean_confidence", "std_confidence",
                 "resolution",
             }
