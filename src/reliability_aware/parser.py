@@ -67,10 +67,10 @@ def get_dataset_hashes(file_path: Path):
     Returns:
         List containing valid hashes
     """
-    with open(file_path, "r", encoding="utf-8") as file:
-        if not file_path.exists():
+    if not file_path.exists():
             logger.warning(f"Hash file not found: {file_path}")
             return []
+    with open(file_path, "r", encoding="utf-8") as file:
         hashlist_txt = file.read()
-        hashlist = [line.strip() for line in file]
+        hashlist = [line.strip() for line in hashlist_txt.splitlines() if line.strip()]
     return hashlist
