@@ -1,7 +1,20 @@
 from pathlib import Path
 from reliability_aware.config import DATA_DIR
-from reliability_aware.go_term_extraction import build_go_annotations_list
+from reliability_aware.go_term_extraction import ( 
+    build_go_annotations_list, 
+    build_subject_go_index, 
+    save_subject_go_index, 
+    save_go_vocab
+    )
 from reliability_aware.parser import get_protein_info
+from reliability_aware.diamond_homology import (
+    DiamondSearchConfig,
+    read_fasta_as_dict,
+    write_fasta_from_ids,
+    build_diamond_database,
+    run_diamond_blastp,
+    build_aligned_homology_shards,
+)
 
 pdb_fasta_dir = DATA_DIR / "cleaned_dataset/pdb"
 
@@ -16,21 +29,10 @@ obo_path = DATA_DIR / "HEAL_dataset/go-basic.obo"
 train_ids = {
    protein["full_id"] for protein in protein_info
 }
-# These are the two objects your earlier homology code needs:
-#   label_to_go_terms = bp_label_to_go_terms
-#   go_terms = bp_go_terms
+GO_ASPECT = "CC"
 
-from reliability_aware.diamond_homology import (
-    DiamondSearchConfig,
-    build_subject_go_index,
-    save_subject_go_index,
-    save_go_vocab,
-    read_fasta_as_dict,
-    write_fasta_from_ids,
-    build_diamond_database,
-    run_diamond_blastp,
-    build_aligned_homology_shards,
-)
+
+
 
 # Build FASTA for the training database only
 train_sequences = read_fasta_as_dict(train)
@@ -51,6 +53,9 @@ bp_label_to_go_terms, bp_go_terms = build_go_annotations_list(
 bp_go_term_to_idx = {go: i for i, go in enumerate(bp_go_terms)}
 
 print(len(bp_go_terms))
+
+
+
 subject_index = build_subject_go_index(bp_label_to_go_terms, bp_go_term_to_idx)
 save_subject_go_index(subject_index, "diamond/subject_go_index.json")
 save_go_vocab(bp_go_terms, "diamond/go_vocab.json")
