@@ -1,13 +1,13 @@
 import reliability_aware.preprocessing as preprocessing
 import logging
-from reliability_aware.config import setup_logging
+from reliability_aware.config import setup_logging, DATA_DIR, PROJECT_ROOT
 logger = logging.getLogger(__name__)
 
 setup_logging()
 
 HEAL_DIR = DATA_DIR / "HEAL_dataset"
-STRUCTURE_DIR = config.PROJECT_ROOT / "structures/pdb"
-OUTPUT_FILE = 
+STRUCTURE_DIR = PROJECT_ROOT / "structures/pdb"
+OUTPUT_FILE_DIR = DATA_DIR / "cleaned_dataset/pdb" 
 RETAINED_XRAY_IDS = DATA_DIR / "retained_xray_ids_pdb"
 
 
@@ -16,7 +16,7 @@ pipeline_results = {}
 def main():
     for split in ["train", "test", "val"]:
         fasta_file_path = HEAL_DIR / f"nrPDB-GO_2019.06.18_{split}_sequences.fasta"
-        output_file = f"cleaned_pdb_{split}"
+        output_file = OUTPUT_FILE_DIR / f"cleaned_pdb_{split}"
         structure_dir = STRUCTURE_DIR / f"pdb_{split}"
 
         if split not in pipeline_results:
@@ -27,7 +27,7 @@ def main():
 
         download_fn = preprocessing.download_one_pdb_structure
 
-        logger.info(f"Downloading structures for {dataset_type}_{split}....")
+        logger.info(f"Downloading structures for pdb_{split}....")
         download_result = preprocessing.download_multiple_structures_fast(
             fasta_file_path, structure_dir, download_fn
         )
