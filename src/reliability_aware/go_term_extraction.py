@@ -1,10 +1,9 @@
 from __future__ import annotations
-import csv
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence, Mapping
+import json
 from goatools.obo_parser import GODag
-from reliability_aware.parser import get_protein_info
-from reliability_aware.config import DATA_DIR
+import torch
 
 
 GO_ASPECT_TO_COLUMN = {
@@ -140,6 +139,38 @@ def save_go_vocab(go_terms: Sequence[str], output_json_path: str | Path) -> Path
     output_json_path.parent.mkdir(parents=True, exist_ok=True)
     output_json_path.write_text(json.dumps(list(go_terms), indent=2))
     return output_json_path
+
+def build_child_parent_idx_pairs(
+    obo_path: str | Path,
+    go_terms: list[str],
+) -> torch.Tensor:
+    """
+    Build direct child-parent GO index pairs for one aspect-specific GO vocab.
+
+    Returns:
+        LongTensor of shape (num_pairs, 2)
+        column 0 = child_idx
+        column 1 = parent_idx
+    """
+    go_dag = GODag(str(obo_path), optional_attrs={"relationship"})
+    go_to_idx = {go: i for i, go in enumerate(go_terms)}
+
+    pairs = []
+
+    for child_go in go_terms:
+        if child_go not in go_dag:
+            continue
+
+        child_idx = go_to_idx[child_go]
+
+        for parent in go_dag[child_go].parents:
+            parent_go = parent.id
+
+            if parent_go in go_to_idx:
+                parent_idx = go_to_idx[parent_go]
+                pairs.append((child_idx, parent_idx))
+
+    return torch.tensor(pairs, dtype=torch.long)
 
 def _extract_go_terms(
     tsv_path: str | Path,
