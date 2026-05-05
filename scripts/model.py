@@ -14,11 +14,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 GO_ASPECT = "BP"
 
 TSV_PATH = DATA_DIR / "HEAL_dataset/nrPDB-GO_2019.06.18_annot.tsv"
-OBO_PATH = DATA_DIR / "data/HEAL_dataset/go-basic.obo"
-GRAPH_SHARD_DIR = PROJECT_ROOT / "graph_shards/pdb_graph_shards/train"
+OBO_PATH = DATA_DIR / "HEAL_dataset/go-basic.obo"
+GRAPH_SHARD_DIR = PROJECT_ROOT / "graph_shards/train"
 HOMOLOGY_SHARD_DIR = PROJECT_ROOT / "diamond/train_homology_shards"
 PDB_FASTA_DIR = DATA_DIR / "cleaned_dataset/pdb"
-ESM_SHARD_DIR = "" #use directory from the runpod network volume
+ESM_SHARD_DIR = PROJECT_ROOT / "esm_embeddings/pdb/pdb_train" #use directory from the runpod network volume
+MANIFEST_PATH = PROJECT_ROOT / "esm_manifests/pdb_train_manifest.csv"
 
 train_data = PDB_FASTA_DIR / "cleaned_pdb_train.fasta"
 
@@ -63,17 +64,17 @@ pos_weight = compute_pos_weight_from_label_indices(
 )
 
 
-dataset = ESMGraphHomologyShardDataset(
+train_dataset = ESMGraphHomologyShardDataset(
     esm_shard_dir=ESM_SHARD_DIR,
     graph_shard_dir=GRAPH_SHARD_DIR,
     homology_shard_dir=HOMOLOGY_SHARD_DIR,
-    manifest_path=manifest_path,
+    manifest_path=MANIFEST_PATH,
     require_graph=True,
     keep_ids=keep_ids_for_aspect,
 )
 
 batch_sampler = HybridBatchSampler(
-    dataset=dataset,
+    dataset=train_dataset,
     batch_size=16,
     active_shards=3,
     lookahead_factor=2,
@@ -101,7 +102,7 @@ gat_branch = GATBranch(
     use_confidence_as_node_feature=True,
 )
 
-num_go_terms = len(go_terms) # replace with your real output dimension
+num_go_terms = len(go_terms) 
 
 model = ReliabilityAwareProteinFunctionModel(
     seq_branch=seq_branch,
