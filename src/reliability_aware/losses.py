@@ -115,31 +115,4 @@ def hierarchy_loss(fused_probs, child_parent_pairs):
 
     return torch.relu(child_probs - parent_probs).mean()
 
-def compute_pos_weight_from_label_indices(
-    label_to_indices: dict[str, list[int]],
-    num_go_terms: int,
-    train_ids: set[str],
-    cap: float = 20.0,
-) -> torch.Tensor:
-    """
-    Computes term-specific positive weights from training labels only.
-
-    train_ids = keep_ids_for_aspect (use filtered proteins)
-    """
-    pos_counts = torch.zeros(num_go_terms, dtype=torch.float32)
-
-    valid_train_ids = [label for label in train_ids if label in label_to_indices]
-    n_train = len(valid_train_ids)
-
-    if n_train == 0:
-        raise ValueError("No valid training IDs found for pos_weight calculation.")
-
-    for label in valid_train_ids:
-        idxs = label_to_indices[label]
-        if idxs:
-            pos_counts[idxs] += 1.0
-
-    pos_weight = (n_train - pos_counts) / (pos_counts + 1.0)
-    pos_weight = torch.clamp(pos_weight, max=cap)
-
-    return pos_weight
+    

@@ -1,0 +1,17 @@
+{
+  "aligned_to": "ESM manifest shard_number/local_seq_idx order",
+  "config": {
+    "diamond_exe": "diamond.exe",
+    "evalue_max": 1e-05,
+    "iterate": true,
+    "max_target_seqs": 50,
+    "min_query_coverage": 0.3,
+    "sensitivity": "sensitive",
+    "threads": 16,
+    "top_k": 10
+  },
+  "hit_rate": 0.0,
+  "num_go_terms": 1968,
+  "num_queries": 19034,
+  "num_queries_with_hits": 0
+}
