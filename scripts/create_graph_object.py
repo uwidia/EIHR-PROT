@@ -20,7 +20,7 @@ def main():
             manifest_path = ESM_MANIFEST_PATH / f"pdb_{split}_manifest.csv" ,
             fasta_path = fasta_path,
             structure_dir = structure_file,
-            output_dir = OUTPUT_DIR / f"pdb_{split}"
+            output_dir = OUTPUT_DIR / f"pdb_{split}",
             get_protein_info_fn = get_protein_info,
             process_single_entry_fn = process_single_entry,
             cutoff = 10.0,
