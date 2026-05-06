@@ -165,7 +165,7 @@ class HybridBatchSampler(Sampler):
 
     def __init__(
         self,
-        dataset: Dataset,
+        dataset,
         batch_size: int,
         active_shards: int = 3,
         lookahead_factor: int = 2,

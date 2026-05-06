@@ -102,7 +102,7 @@ def build_aligned_graph_shards(
             "num_graphs_failed": total_failed,
             "alignment": "graph_shard_k graphs[i] aligned to ESM shard k local_seq_idx i",
         }
-        torch.save(metadata, output_dir / "graph_shard_metadata.pt")
+        torch.save(metadata, output_dir / "metadata.pt")
         logger.info(f"Done! Graphs built: {total_ok} | Graphs failed: {total_failed} | Output dir: {output_dir}")
 
 
