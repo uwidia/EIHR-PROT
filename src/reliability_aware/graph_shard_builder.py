@@ -152,7 +152,7 @@ def parse_structure(
     fasta_seq: str,
     chain_id: str,
 ) -> GraphDict | None:
-    """Parse a CIF chain into residue-level structure, confidence_proxy, and metadata tensors."""
+    """Parse a CIF chain into residue-level structure, confidence, and metadata tensors."""
     structure_file = Path(structure_file)
 
     try:
@@ -191,7 +191,7 @@ def parse_structure(
         return {
             "coords": torch.from_numpy(residue_arrays["full_coords"]),
             "has_structure": torch.from_numpy(residue_arrays["has_structure"]),
-            "confidence_proxy": torch.from_numpy(conf.astype(np.float32)),
+            "confidence": torch.from_numpy(conf.astype(np.float32)),
             "has_confidence": torch.from_numpy(has_confidence),
             "resolution": metadata["resolution"]
         }
@@ -374,16 +374,16 @@ def construct_graph(
 
     coords = data["coords"]
     has_structure = data["has_structure"]
-    confidence_proxy = data["confidence_proxy"]
+    confidence = data["confidence"]
     resolution = data["resolution"]
 
     #Global stats
     coverage, mean_conf, std_conf = _compute_global_stats(
-        has_structure, confidence_proxy
+        has_structure, confidence
     )
 
     # Edge weights
-    edge_weight = _compute_edge_weights(edge_index, confidence_proxy)
+    edge_weight = _compute_edge_weights(edge_index, confidence)
 
 
     graph = {
@@ -395,7 +395,7 @@ def construct_graph(
 
         # Node-level metadata
         "has_structure": has_structure,           # (L,)
-        "confidence_proxy": confidence_proxy,                 # (L,)
+        "confidence": confidence,                 # (L,)
 
         # Global metadata
         "coverage": coverage,                     # float
@@ -511,7 +511,7 @@ def _calculate_confidence(
     full_occupancy: np.ndarray,
     sequence_length: int,
 ) -> np.ndarray | None:
-    """Convert B-factors and occupancy into per-residue confidence_proxy scores."""
+    """Convert B-factors and occupancy into per-residue confidence scores."""
     L = sequence_length
     conf = np.zeros(L, dtype=np.float32)
 
@@ -542,15 +542,15 @@ def _calculate_confidence(
 
 def _compute_global_stats(
     has_structure: torch.Tensor,
-    confidence_proxy: torch.Tensor,
+    confidence: torch.Tensor,
 ) -> tuple[float, float, float]:
-    """Compute coverage and confidence_proxy summary statistics."""
+    """Compute coverage and confidence summary statistics."""
     mask = has_structure.bool()
 
     if mask.sum() == 0:
         return 0.0, 0.0, 0.0
 
-    conf_valid = confidence_proxy[mask]
+    conf_valid = confidence[mask]
 
     coverage = float(mask.float().mean())
     mean_conf = float(conf_valid.mean())
@@ -561,8 +561,8 @@ def _compute_global_stats(
 
 def _compute_edge_weights(
     edge_index: torch.Tensor,
-    confidence_proxy: torch.Tensor,
+    confidence: torch.Tensor,
 ) -> torch.Tensor:
-    """Compute each edge weight as the product of endpoint confidence_proxy scores."""
+    """Compute each edge weight as the product of endpoint confidence scores."""
     i, j = edge_index
-    return confidence_proxy[i] * confidence_proxy[j]
+    return confidence[i] * confidence[j]

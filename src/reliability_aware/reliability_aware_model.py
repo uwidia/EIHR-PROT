@@ -7,6 +7,7 @@ import random
 import logging
 from torch_geometric.data import Data, Batch
 from reliability_aware.go_term_extraction import build_go_annotations_list
+from reliability_aware.pool_embeddings import FusionMLP, NeuralLogitHead
 
 logger = logging.getLogger(__name__)
 GO_ASPECT = "BP"

@@ -64,7 +64,7 @@ def run_one_batch_smoke_test(
     )
 
     hier = hierarchy_loss(
-        probs=fused_probs,
+        fused_probs=fused_probs,
         child_parent_pairs=child_parent_pairs,
     )
 

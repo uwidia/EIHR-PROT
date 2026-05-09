@@ -83,7 +83,7 @@ batch_sampler = HybridBatchSampler(
 )
 
 loader = DataLoader(
-    dataset,
+    train_dataset,
     batch_sampler=batch_sampler,
     collate_fn=multimodal_collate_fn_generator(label_to_indices=label_to_indices, num_go_terms=len(go_terms)),
     num_workers=0,
@@ -107,7 +107,7 @@ num_go_terms = len(go_terms)
 model = ReliabilityAwareProteinFunctionModel(
     seq_branch=seq_branch,
     gat_branch=gat_branch,
-    num_classes=num_go_terms,
+    num_go_terms=num_go_terms,
     fusion_hidden_dim=1024,
     fusion_out_dim=512,
     gate_q_dim=8,

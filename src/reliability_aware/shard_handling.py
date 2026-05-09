@@ -219,7 +219,7 @@ class ESMGraphShardDataset(Dataset):
                 raise TypeError(f"{shard_file}: graph entry must be dict or None")
             required_keys = {
                 "coords", "edge_index", "edge_attr", "edge_weight",
-                "has_structure", "confidence_proxy",
+                "has_structure", "confidence",
                 "coverage", "mean_confidence", "std_confidence",
                 "resolution",
             }
@@ -355,17 +355,20 @@ class HomologyShardDataset(torch.utils.data.Dataset):
         self.lengths: list[int] = []
         self.indices_by_shard: dict[int, list[int]] = defaultdict(list)
 
-        manifest_rows = load_manifest_rows(self.manifest_path)
-        for dataset_idx, row in enumerate(manifest_rows):
-            shard_id = row["shard_number"]
-            local_idx = row["local_seq_idx"]
-            global_idx = row["global_seq_idx"]
-            label = row["label"]
-            seq_len = row["sequence_length"]
 
-            self.index.append((shard_id, local_idx, global_idx, label))
-            self.lengths.append(seq_len)
-            self.indices_by_shard[shard_id].append(dataset_idx)
+
+        with open(self.manifest_path, "r") as f:
+            manifest_rows = csv.DictReader(f)
+            for dataset_idx, row in enumerate(manifest_rows):
+                shard_id = int(row["shard_number"])
+                local_idx = int(row["local_seq_idx"])
+                global_idx = int(row["global_seq_idx"])
+                label = row["label"]
+                seq_len = int(row["sequence_length"])
+
+                self.index.append((shard_id, local_idx, global_idx, label))
+                self.lengths.append(seq_len)
+                self.indices_by_shard[shard_id].append(dataset_idx)
         self.index, self.lengths, self.indices_by_shard = filter_index_by_keep_ids(
             self.index,
             self.lengths,
@@ -573,4 +576,3 @@ def flush_shard(shard_buffer: BufferState, output_dir: Path):
     shard_buffer.next_shard()
     shard_buffer.reset()
 
-    
