@@ -1,4 +1,5 @@
 #SCRIPT FOR muLtimodal version
+from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 from reliability_aware.parser import get_protein_info
@@ -8,6 +9,10 @@ import reliability_aware.reliability_aware_model as ra_model
 from reliability_aware.shard_handling import ESMGraphHomologyShardDataset
 from reliability_aware.pool_embeddings import GATBranch, ESMSequenceBranch
 from reliability_aware.config import DATA_DIR, PROJECT_ROOT
+from copy import deepcopy
+import json
+import random
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -92,13 +97,6 @@ val_keep_ids_for_aspect = {
     if len(idxs) > 0
 }
 
-pos_weight = compute_pos_weight_from_label_indices(
-    label_to_indices=train_label_to_indices,
-    num_go_terms=len(go_terms),
-    train_ids=train_keep_ids_for_aspect,
-    cap=20.0,
-)
-
 
 train_dataset = ESMGraphHomologyShardDataset(
     esm_shard_dir=TRAIN_ESM_SHARD_DIR,
@@ -153,38 +151,14 @@ val_loader = DataLoader(
     pin_memory=True,
 )
 
-
-seq_branch = ESMSequenceBranch()
-
-gat_branch = GATBranch(
-    esm_dim=1280,
-    hidden_dim=256,
-    heads=4,
-    dropout=0.1,
-    edge_dim=5,
-    out_dim=1280,
-    use_confidence_as_node_feature=True,
-)
-
-num_go_terms = len(go_terms) 
-
-model = ra_model.ReliabilityAwareProteinFunctionModel(
-    seq_branch=seq_branch,
-    gat_branch=gat_branch,
-    num_go_terms=num_go_terms,
-    fusion_hidden_dim=1024,
-    fusion_out_dim=512,
-    gate_q_dim=8,
-    gate_hidden_dim=32,
-    dropout=0.2,
+ic = ra_model.compute_ic_from_label_indices(
+    label_to_indices=train_label_to_indices,
+    num_go_terms=len(go_terms),
+    train_ids=train_keep_ids_for_aspect,
 ).to(device)
 
-optimizer = torch.optim.AdamW(
-    model.parameters(),
-    lr=1e-4,
-    weight_decay=1e-4,
-)
 
+num_go_terms = len(go_terms) 
 
 lambda_hier = 0.01
 
@@ -198,26 +172,85 @@ run_one_batch_smoke_test(
     device=device,
 )
 
+#Randomized Search
+SEARCH_SPACE = {
+    "learning_rate": [1e-5, 3e-5, 1e-4, 3e-4],
+    "fusion_hidden_dim": [512, 768, 1024, 1536],
+    "lambda_hier": [0.001, 0.005, 0.01, 0.05, 0.1],
+    "pos_weight_cap": [5.0, 10.0, 20.0, 30.0],
+    "dropout": [0.1, 0.2, 0.3, 0.4],
+}
 
-ic = ra_model.compute_ic_from_label_indices(
-    label_to_indices=train_label_to_indices,
-    num_go_terms=len(go_terms),
-    train_ids=train_keep_ids_for_aspect,
-).to(device)
+def sample_hparams():
+    return {k: random.choice(v) for k, v in SEARCH_SPACE.items()}
 
+best_score = -1.0
+best_record = None
+num_trials = 20
 
-#Run Model
-history = ra_model.fit(
-    model=model,
-    train_loader=train_loader,
-    val_loader=val_loader,
-    optimizer=optimizer,
-    pos_weight=pos_weight.to(device),
-    child_parent_pairs=child_parent_pairs.to(device),
-    ic=ic,
-    device=device,
-    lambda_hier=lambda_hier,
-    num_epochs=100,
-    patience=10,
-    out_dir="runs/bp_run_01",
-)
+for trial in range(num_trials):
+    h = sample_hparams()
+
+    pos_weight = compute_pos_weight_from_label_indices(
+        label_to_indices=train_label_to_indices,
+        num_go_terms=len(go_terms),
+        train_ids=train_keep_ids_for_aspect,
+        cap=h["pos_weight_cap"],
+    )
+
+    seq_branch = ESMSequenceBranch(attn_dropout=h["dropout"])
+    gat_branch = GATBranch(dropout=h["dropout"])
+
+    model = ra_model.ReliabilityAwareProteinFunctionModel(
+        seq_branch=seq_branch,
+        gat_branch=gat_branch,
+        num_go_terms=len(go_terms),
+        fusion_hidden_dim=h["fusion_hidden_dim"],
+        dropout=h["dropout"],
+    ).to(device)
+
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=h["learning_rate"],
+        weight_decay=1e-4,
+    )
+
+    trial_dir = Path(f"runs/search/trial_{trial:03d}")
+
+    history = ra_model.fit(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        optimizer=optimizer,
+        pos_weight=pos_weight.to(device),
+        child_parent_pairs=child_parent_pairs.to(device),
+        ic=ic,
+        device=device,
+        lambda_hier=h["lambda_hier"],
+        num_epochs=30,
+        patience=5,
+        out_dir=trial_dir,
+        hparams=deepcopy(h),
+    )
+
+    score = max(history["val_Fmax"])
+
+    record = {
+        "trial": trial,
+        "score": score,
+        "metrics": {
+            "Fmax": history["val_Fmax"],
+            "Smin": history["val_Smin"],
+            "AUPR": history["val_AUPR"],
+        },
+        "hparams": deepcopy(h),
+    }
+
+    torch.save(record, trial_dir / "best_meta.pt")
+
+    if score > best_score:
+        best_score = score
+        best_record = record
+        torch.save(record, "runs/search/best_meta.pt")
+
+print(best_record)

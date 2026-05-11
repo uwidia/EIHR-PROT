@@ -363,7 +363,7 @@ def compute_ic_from_label_indices(
     p = (counts + 1.0) / (n + 2.0)
     return -torch.log(p.clamp_min(1e-12))
 
-    return best
+
 
 
 def train_one_epoch(
@@ -441,8 +441,8 @@ def evaluate_model(
 ):
     model.eval()
     total_loss = 0.0
-    bce_loss = 0.0
-    hier_loss = 0.0
+    bce_loss_total = 0.0
+    hier_loss_total = 0.0
     n_batches = 0
     all_probs = []
     all_targets = []
@@ -486,8 +486,8 @@ def evaluate_model(
         total_loss += loss.item()
         n_batches += 1
 
-        bce_loss += bce_loss
-        hier_loss += hier_loss
+        bce_loss_total += bce_loss.item()
+        hier_loss_total += hier_loss.item()
 
         all_probs.append(outputs["fused_probs"].detach().cpu())
         all_targets.append(targets.detach().cpu())
@@ -504,8 +504,8 @@ def evaluate_model(
 
     return {
         "val_loss": total_loss / max(n_batches, 1),
-        "bce_loss": bce_loss,
-        "heirarchy_loss": hier_loss,
+        "bce_loss": bce_loss_total / max(n_batches, 1),
+        "hierarchy_loss": hier_loss_total / max(n_batches, 1),
         "Fmax": fmax["Fmax"],
         "Fmax_threshold": fmax["threshold"],
         "AUPR": float(aupr),
@@ -528,6 +528,7 @@ def fit(
     num_epochs: int = 100,
     patience: int = 10,
     out_dir: str | Path = "runs/go_train",
+    hparams: dict | None = None,
 ):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -590,6 +591,7 @@ def fit(
                     "optimizer_state_dict": copy.deepcopy(optimizer.state_dict()),
                     "val_metrics": val_metrics,
                     "train_loss": train_loss,
+                    "hparams": hparams,
                 },
                 best_path,
             )
