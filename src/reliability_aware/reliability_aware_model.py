@@ -549,7 +549,9 @@ def fit(
     best_path = out_dir / "best_model.pt"
     history_path = out_dir / "history.pt"
 
+    print(device)
     for epoch in range(1, num_epochs + 1):
+        print(f"epoch {epoch} currently running...")
         train_loss = train_one_epoch(
             model=model,
             loader=train_loader,

@@ -12,9 +12,13 @@ from reliability_aware.config import DATA_DIR, PROJECT_ROOT
 from copy import deepcopy
 import json
 import random
+import logging
+import reliability_aware.config as config
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+config.setup_logging()
+logger = logging.getLogger(__name__)
+
 
 GO_ASPECT = "BP"
 
@@ -36,6 +40,23 @@ VAL_ESM_SHARD_DIR = PROJECT_ROOT / "esm_embeddings/pdb/pdb_val"
 VAL_MANIFEST_PATH = PROJECT_ROOT / "esm_manifests/pdb_val_manifest.csv"
 VAL_DATA = PDB_FASTA_DIR / "cleaned_pdb_val.fasta"
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def filter_dataset(dataset, name):
+    valid_indices = []
+
+    for i in range(len(dataset)):
+        try:
+            sample = dataset[i]
+
+            if sample["graph"] is not None:
+                valid_indices.append(i)
+
+        except Exception as e:
+            logger.info(f"Skipping sample {i}: {e}")
+    print(f"Filtering complete for {name}")
+
+    return torch.utils.data.Subset(dataset, valid_indices)
 
 
 train_protein_info = get_protein_info(TRAIN_DATA)
@@ -107,6 +128,7 @@ train_dataset = ESMGraphHomologyShardDataset(
     keep_ids=train_keep_ids_for_aspect,
 )
 
+
 val_dataset = ESMGraphHomologyShardDataset(
     esm_shard_dir=VAL_ESM_SHARD_DIR,
     graph_shard_dir=VAL_GRAPH_SHARD_DIR,
@@ -115,6 +137,16 @@ val_dataset = ESMGraphHomologyShardDataset(
     require_graph=True,
     keep_ids=val_keep_ids_for_aspect,
 )
+
+
+print("Filtering train dataset...")
+train_dataset._filter_invalid_samples()
+
+print("Filtering validation dataset...")
+val_dataset._filter_invalid_samples()
+
+
+
 
 train_batch_sampler = ra_model.HybridBatchSampler(
     dataset=train_dataset,
@@ -162,15 +194,6 @@ num_go_terms = len(go_terms)
 
 lambda_hier = 0.01
 
-run_one_batch_smoke_test(
-    model=model,
-    train_loader=train_loader,
-    optimizer=optimizer,
-    pos_weight=pos_weight,
-    child_parent_pairs=child_parent_pairs,
-    lambda_hier=lambda_hier,
-    device=device,
-)
 
 #Randomized Search
 SEARCH_SPACE = {
@@ -187,8 +210,10 @@ def sample_hparams():
 best_score = -1.0
 best_record = None
 num_trials = 20
+counter = 1
 
 for trial in range(num_trials):
+    
     h = sample_hparams()
 
     pos_weight = compute_pos_weight_from_label_indices(
@@ -214,7 +239,20 @@ for trial in range(num_trials):
         lr=h["learning_rate"],
         weight_decay=1e-4,
     )
-
+    
+    if counter == 1:
+        run_one_batch_smoke_test(
+        model=model,
+        train_loader=train_loader,
+        optimizer=optimizer,
+        pos_weight=pos_weight,
+        child_parent_pairs=child_parent_pairs,
+        lambda_hier=lambda_hier,
+        device=device,
+        )
+        print("Smoke test passed.... Now running training")
+    counter += 1
+    
     trial_dir = Path(f"runs/search/trial_{trial:03d}")
 
     history = ra_model.fit(
@@ -227,8 +265,8 @@ for trial in range(num_trials):
         ic=ic,
         device=device,
         lambda_hier=h["lambda_hier"],
-        num_epochs=30,
-        patience=5,
+        num_epochs=20,
+        patience=15,
         out_dir=trial_dir,
         hparams=deepcopy(h),
     )

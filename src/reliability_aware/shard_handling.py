@@ -39,6 +39,8 @@ def filter_index_by_keep_ids(index, lengths, keep_ids):
 
     return new_index, new_lengths, new_indices_by_shard
 
+from collections import defaultdict
+
 class ESMGraphHomologyShardDataset(Dataset):
     def __init__(
         self,
@@ -46,7 +48,7 @@ class ESMGraphHomologyShardDataset(Dataset):
         graph_shard_dir: str,
         homology_shard_dir: str,
         manifest_path: str,
-        keep_ids = None,
+        keep_ids=None,
         require_graph: bool = True,
     ):
         self.seq_graph_ds = ESMGraphShardDataset(
@@ -54,17 +56,17 @@ class ESMGraphHomologyShardDataset(Dataset):
             graph_shard_dir=graph_shard_dir,
             manifest_path=manifest_path,
             require_graph=require_graph,
-            keep_ids = keep_ids,
+            keep_ids=keep_ids,
         )
         self.homology_ds = HomologyShardDataset(
             homology_shard_dir=homology_shard_dir,
             manifest_path=manifest_path,
-            keep_ids = keep_ids,
+            keep_ids=keep_ids,
         )
 
         if len(self.seq_graph_ds) != len(self.homology_ds):
             raise ValueError("Dataset length mismatch between seq+graph and homology datasets.")
-        
+
         self.lengths = self.seq_graph_ds.lengths
         self.indices_by_shard = self.seq_graph_ds.indices_by_shard
 
@@ -90,6 +92,43 @@ class ESMGraphHomologyShardDataset(Dataset):
             "homology_prior": h["prior"].float(),
             "homology_gate": h["homology_gate"].float(),
         }
+
+    def _filter_invalid_samples(self):
+        keep = []
+        skipped = 0
+
+        for idx in range(len(self)):
+            try:
+                sample = self[idx]
+                if sample["graph"] is not None:
+                    keep.append(idx)
+            except Exception as e:
+                print(f"Skipping sample {idx}: {e}")
+                skipped += 1
+
+        self.seq_graph_ds.index = [self.seq_graph_ds.index[i] for i in keep]
+        self.seq_graph_ds.lengths = [self.seq_graph_ds.lengths[i] for i in keep]
+
+        seq_indices_by_shard = defaultdict(list)
+        for new_idx, old_idx in enumerate(keep):
+            shard_id = self.seq_graph_ds.index[new_idx][0]
+            seq_indices_by_shard[shard_id].append(new_idx)
+        self.seq_graph_ds.indices_by_shard = seq_indices_by_shard
+
+        self.homology_ds.index = [self.homology_ds.index[i] for i in keep]
+        self.homology_ds.lengths = [self.homology_ds.lengths[i] for i in keep]
+
+        homology_indices_by_shard = defaultdict(list)
+        for new_idx, old_idx in enumerate(keep):
+            shard_id = self.homology_ds.index[new_idx][0]
+            homology_indices_by_shard[shard_id].append(new_idx)
+        self.homology_ds.indices_by_shard = homology_indices_by_shard
+
+        self.lengths = self.seq_graph_ds.lengths
+        self.indices_by_shard = self.seq_graph_ds.indices_by_shard
+
+        print(f"Filtering complete. Remaining samples: {len(keep)}")
+        print(f"Skipped samples: {skipped}")
 
 class ESMGraphShardDataset(Dataset):
     """
@@ -229,6 +268,7 @@ class ESMGraphShardDataset(Dataset):
             checked += 1
             if checked >= 3:
                 break
+                
     def _load_esm_shard(self, shard_id: int):
         if shard_id in self._esm_cache:
             self._esm_cache.move_to_end(shard_id)
@@ -299,6 +339,9 @@ class ESMGraphShardDataset(Dataset):
                 f"Label mismatch at dataset idx={idx}: manifest={label}, esm_shard={esm_label}"
             )
 
+
+        
+        
         if graph is None and self.require_graph:
             raise ValueError(
                 f"Graph missing for idx={idx}, label={label}, shard={shard_id}, local_idx={local_idx}"

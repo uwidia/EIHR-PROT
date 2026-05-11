@@ -63,3 +63,4 @@ def smin_score(
                 "ru": ru.item(),
                 "mi": mi.item(),
             }
+    return best
