@@ -199,7 +199,7 @@ run_one_batch_smoke_test(
 )
 
 
-ic = compute_ic_from_label_indices(
+ic = ra_model.compute_ic_from_label_indices(
     label_to_indices=train_label_to_indices,
     num_go_terms=len(go_terms),
     train_ids=train_keep_ids_for_aspect,
@@ -207,9 +207,9 @@ ic = compute_ic_from_label_indices(
 
 
 #Run Model
-history = fit(
+history = ra_model.fit(
     model=model,
-    train_loader=loader,
+    train_loader=train_loader,
     val_loader=val_loader,
     optimizer=optimizer,
     pos_weight=pos_weight.to(device),
