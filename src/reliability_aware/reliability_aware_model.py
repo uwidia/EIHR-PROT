@@ -509,8 +509,10 @@ def evaluate_model(
         "Fmax": fmax["Fmax"],
         "Fmax_threshold": fmax["threshold"],
         "AUPR": float(aupr),
-        "Smin": smin["Smin"],
-        "Smin_threshold": smin["threshold"],
+        "Smin_raw": smin["raw"]["Smin"],
+        "Smin_threshold_raw": smin["raw"]["threshold"],
+        "Smin_normalized": smin["normalized"]["Smin"],
+        "Smin_threshold_normalized": smin["normalized"]["threshold"],
     }
 
 
@@ -538,9 +540,11 @@ def fit(
         "val_loss": [],
         "val_Fmax": [],
         "val_AUPR": [],
-        "val_Smin": [],
+        "val_Smin_raw": [],
+        "val_Smin_normalized": [],
+        "val_Smin_raw_threshold": [],
+        "val_Smin_normalized_threshold": [],
         "val_Fmax_threshold": [],
-        "val_Smin_threshold": [],
     }
 
     best_fmax = -1.0
@@ -576,9 +580,11 @@ def fit(
         history["val_loss"].append(val_metrics["val_loss"])
         history["val_Fmax"].append(val_metrics["Fmax"])
         history["val_AUPR"].append(val_metrics["AUPR"])
-        history["val_Smin"].append(val_metrics["Smin"])
+        history["val_Smin_raw"].append(val_metrics["Smin_raw"])
+        history["val_Smin_normalized"].append(val_metrics["Smin_normalized"])
+        history["val_Smin_raw_threshold"].append(val_metrics["Smin_threshold_raw"])
+        history["val_Smin_normalized_threshold"].append(val_metrics["Smin_threshold_normalized"])
         history["val_Fmax_threshold"].append(val_metrics["Fmax_threshold"])
-        history["val_Smin_threshold"].append(val_metrics["Smin_threshold"])
 
         torch.save(history, history_path)
 
@@ -607,7 +613,8 @@ def fit(
                 f"val_loss={val_metrics['val_loss']:.4f} | "
                 f"Fmax={val_metrics['Fmax']:.4f} | "
                 f"AUPR={val_metrics['AUPR']:.4f} | "
-                f"Smin={val_metrics['Smin']:.4f}"
+                f"Smin={val_metrics['Smin_raw']:.4f} | "
+                f"Smin (normalized)={val_metrics['Smin_normalized']:.4f}"
             )
 
         if bad_epochs >= patience:
