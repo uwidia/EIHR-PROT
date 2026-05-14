@@ -1,10 +1,17 @@
-#SCRIPT FOR muLtimodal version
+# SCRIPT FOR muLtimodal version
 from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 from reliability_aware.parser import get_protein_info
-from reliability_aware.go_term_extraction import build_subject_go_index, build_go_annotations_list, build_child_parent_idx_pairs
-from reliability_aware.losses import compute_pos_weight_from_label_indices, run_one_batch_smoke_test
+from reliability_aware.go_term_extraction import (
+    build_subject_go_index,
+    build_go_annotations_list,
+    build_child_parent_idx_pairs,
+)
+from reliability_aware.losses import (
+    compute_pos_weight_from_label_indices,
+    run_one_batch_smoke_test,
+)
 import reliability_aware.reliability_aware_model as ra_model
 from reliability_aware.shard_handling import ESMGraphHomologyShardDataset
 from reliability_aware.pool_embeddings import GATBranch, ESMSequenceBranch
@@ -14,7 +21,6 @@ import json
 import random
 import logging
 import reliability_aware.config as config
-
 
 config.setup_logging()
 logger = logging.getLogger(__name__)
@@ -26,14 +32,14 @@ TSV_PATH = DATA_DIR / "HEAL_dataset/nrPDB-GO_2019.06.18_annot.tsv"
 OBO_PATH = DATA_DIR / "HEAL_dataset/go-basic.obo"
 PDB_FASTA_DIR = DATA_DIR / "cleaned_dataset/pdb"
 
-#training dataset paths
+# training dataset paths
 TRAIN_GRAPH_SHARD_DIR = PROJECT_ROOT / "graph_shards/train"
 TRAIN_HOMOLOGY_SHARD_DIR = PROJECT_ROOT / "diamond/train_homology_shards"
-TRAIN_ESM_SHARD_DIR = PROJECT_ROOT / "esm_embeddings/pdb/pdb_train" 
+TRAIN_ESM_SHARD_DIR = PROJECT_ROOT / "esm_embeddings/pdb/pdb_train"
 TRAIN_MANIFEST_PATH = PROJECT_ROOT / "esm_manifests/pdb_train_manifest.csv"
 TRAIN_DATA = PDB_FASTA_DIR / "cleaned_pdb_train.fasta"
 
-#validation dataset paths
+# validation dataset paths
 VAL_GRAPH_SHARD_DIR = PROJECT_ROOT / "graph_shards/val"
 VAL_HOMOLOGY_SHARD_DIR = PROJECT_ROOT / "diamond/val_homology_shards"
 VAL_ESM_SHARD_DIR = PROJECT_ROOT / "esm_embeddings/pdb/pdb_val"
@@ -42,33 +48,13 @@ VAL_DATA = PDB_FASTA_DIR / "cleaned_pdb_val.fasta"
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def filter_dataset(dataset, name):
-    valid_indices = []
-
-    for i in range(len(dataset)):
-        try:
-            sample = dataset[i]
-
-            if sample["graph"] is not None:
-                valid_indices.append(i)
-
-        except Exception as e:
-            logger.info(f"Skipping sample {i}: {e}")
-    print(f"Filtering complete for {name}")
-
-    return torch.utils.data.Subset(dataset, valid_indices)
-
 
 train_protein_info = get_protein_info(TRAIN_DATA)
 val_protein_info = get_protein_info(VAL_DATA)
 
-train_ids = {
-   protein["full_id"] for protein in train_protein_info
-}
+train_ids = {protein["full_id"] for protein in train_protein_info}
 
-val_ids = {
-    protein["full_id"] for protein in val_protein_info
-}
+val_ids = {protein["full_id"] for protein in val_protein_info}
 
 train_label_to_go_terms, go_terms = build_go_annotations_list(
     tsv_path=TSV_PATH,
@@ -109,13 +95,11 @@ val_label_to_indices = build_subject_go_index(
 
 
 train_keep_ids_for_aspect = {
-    label for label, idxs in train_label_to_indices.items()
-    if len(idxs) > 0
+    label for label, idxs in train_label_to_indices.items() if len(idxs) > 0
 }
 
 val_keep_ids_for_aspect = {
-    label for label, idxs in val_label_to_indices.items()
-    if len(idxs) > 0
+    label for label, idxs in val_label_to_indices.items() if len(idxs) > 0
 }
 
 
@@ -146,9 +130,7 @@ print("Filtering validation dataset...")
 val_dataset._filter_invalid_samples()
 
 
-
-
-train_batch_sampler = ra_model.HybridBatchSampler(
+train_batch_sampler = HybridBatchSampler(
     dataset=train_dataset,
     batch_size=16,
     active_shards=3,
@@ -157,12 +139,12 @@ train_batch_sampler = ra_model.HybridBatchSampler(
     seed=42,
 )
 
-val_batch_sampler = ra_model.HybridBatchSampler(
+val_batch_sampler = HybridBatchSampler(
     dataset=val_dataset,
     batch_size=16,
     active_shards=3,
     lookahead_factor=2,
-    drop_last=True,
+    drop_last=False,
     seed=42,
 )
 
@@ -170,7 +152,9 @@ val_batch_sampler = ra_model.HybridBatchSampler(
 train_loader = DataLoader(
     train_dataset,
     batch_sampler=train_batch_sampler,
-    collate_fn=ra_model.multimodal_collate_fn_generator(label_to_indices=train_label_to_indices, num_go_terms=len(go_terms)),
+    collate_fn=ra_model.multimodal_collate_fn_generator(
+        label_to_indices=train_label_to_indices, num_go_terms=len(go_terms)
+    ),
     num_workers=0,
     pin_memory=True,
 )
@@ -178,7 +162,9 @@ train_loader = DataLoader(
 val_loader = DataLoader(
     val_dataset,
     batch_sampler=val_batch_sampler,
-    collate_fn=ra_model.multimodal_collate_fn_generator(label_to_indices=val_label_to_indices, num_go_terms=len(go_terms)),
+    collate_fn=ra_model.multimodal_collate_fn_generator(
+        label_to_indices=val_label_to_indices, num_go_terms=len(go_terms)
+    ),
     num_workers=0,
     pin_memory=True,
 )
@@ -190,7 +176,7 @@ ic = ra_model.compute_ic_from_label_indices(
 ).to(device)
 
 
-num_go_terms = len(go_terms) 
+num_go_terms = len(go_terms)
 
 # lambda_hier = 0.01
 
@@ -213,7 +199,7 @@ num_go_terms = len(go_terms)
 # counter = 1
 
 # for trial in range(num_trials):
-    
+
 #     h = sample_hparams()
 
 #     pos_weight = compute_pos_weight_from_label_indices(
@@ -239,12 +225,12 @@ num_go_terms = len(go_terms)
 #         lr=h["learning_rate"],
 #         weight_decay=1e-4,
 #     )
-    
+
 #     if counter == 1:
 #         run_one_batch_smoke_test(
 #         model=model,
 #         train_loader=train_loader,
-#         optimizer=optimizer,
+#
 #         pos_weight=pos_weight,
 #         child_parent_pairs=child_parent_pairs,
 #         lambda_hier=lambda_hier,
@@ -252,7 +238,7 @@ num_go_terms = len(go_terms)
 #         )
 #         print("Smoke test passed.... Now running training")
 #     counter += 1
-    
+
 #     trial_dir = Path(f"runs/search/trial_{trial:03d}")
 
 #     history = ra_model.fit(
@@ -294,28 +280,13 @@ num_go_terms = len(go_terms)
 # print(best_record)
 
 
-
-#MODEL RUN
+# MODEL RUN
 promising_hparams = [
     {
         "learning_rate": 0.0001,
         "fusion_hidden_dim": 768,
         "lambda_hier": 0.1,
         "pos_weight_cap": 20.0,
-        "dropout": 0.4,
-    },
-    {
-        "learning_rate": 0.0003,
-        "fusion_hidden_dim": 512,
-        "lambda_hier": 0.01,
-        "pos_weight_cap": 5.0,
-        "dropout": 0.1,
-    },
-    {
-        "learning_rate": 0.0003,
-        "fusion_hidden_dim": 1024,
-        "lambda_hier": 0.1,
-        "pos_weight_cap": 10.0,
         "dropout": 0.4,
     },
 ]
@@ -325,7 +296,8 @@ best_score = -1.0
 best_run = None
 
 for run_id, h in enumerate(promising_hparams):
-    run_dir = Path(f"runs/final_runs/run_{run_id:03d}")
+    # run_dir = Path(f"runs/final_runs/run_{run_id:03d}")
+    run_dir = Path(f"runs/final_runs/run_002_redo")
     run_dir.mkdir(parents=True, exist_ok=True)
 
     pos_weight = compute_pos_weight_from_label_indices(
@@ -362,8 +334,8 @@ for run_id, h in enumerate(promising_hparams):
         ic=ic,
         device=device,
         lambda_hier=h["lambda_hier"],
-        num_epochs=50,
-        patience=10,
+        num_epochs=80,
+        patience=12,
         out_dir=run_dir,
         hparams=deepcopy(h),
     )

@@ -1,9 +1,10 @@
 import argparse
-import reliability_aware.extract_embeddings as extract_embeddings
+import utils.extract_esm_embeddings as extract_embeddings
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fasta", type=str, required=True)
+    parser.add_argument("--fasta_file", type=str, required=True)
     parser.add_argument("--outdir", type=str, required=True)
     parser.add_argument("--valid_hashes", type=str, required=True)
     parser.add_argument("--manifest_filename", type=str, default="manifest")
@@ -19,16 +20,16 @@ def main():
     args = parser.parse_args()
 
     extract_embeddings.extract_fasta_embeddings(
-        fasta_path=args.fasta,
+        fasta_path=args.fasta_file,
         output_dir=args.outdir,
-        valid_hashes_path = args.valid_hashes,
+        valid_hashes_path=args.valid_hashes,
         manifest_filename=args.manifest_filename,
         model_name=args.model,
         toks_per_batch=args.toks_per_batch,
         truncation_seq_length=args.truncation_seq_length,
         repr_layer=args.repr_layer,
-        shard_size = args.shard_size,
-        use_fp16 = args.use_fp16,
+        shard_size=args.shard_size,
+        use_fp16=args.use_fp16,
         seed=args.seed,
         deterministic=args.deterministic,
         device=args.device,

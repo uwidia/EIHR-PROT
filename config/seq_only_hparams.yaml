@@ -1,0 +1,38 @@
+num_trials: 15
+trial_epochs: 6
+top_k_params: 5
+patience: 10
+base_dir_search: "runs/search/seq_only"
+base_dir_final: "runs/final/seq_only"
+final_epochs: 60
+
+search_space:
+  learning_rate:   [1e-5, 3e-5, 1e-4, 3e-4]
+  attn_hidden_dim: [128, 256, 512]
+  head_dropout:    [0.1, 0.2, 0.3, 0.4]
+  attn_dropout:    [0.1, 0.2, 0.3]
+  lambda_hier:     [0.0, 0.001, 0.005, 0.01, 0.05]
+  pos_weight_cap:  [5.0, 10.0, 20.0, 30.0]
+  
+#should be a single value here, not list
+promising_hparams:
+  - learning_rate:   [1e-5, 3e-5, 1e-4, 3e-4]
+    attn_hidden_dim: [128, 256, 512]
+    head_dropout:    [0.1, 0.2, 0.3, 0.4]
+    attn_dropout:    [0.1, 0.2, 0.3]
+    lambda_hier:     [0.0, 0.001, 0.005, 0.01, 0.05]
+    pos_weight_cap:  [5.0, 10.0, 20.0, 30.0]
+
+  - learning_rate:   [1e-5, 3e-5, 1e-4, 3e-4]
+    attn_hidden_dim: [128, 256, 512]
+    head_dropout:    [0.1, 0.2, 0.3, 0.4]
+    attn_dropout:    [0.1, 0.2, 0.3]
+    lambda_hier:     [0.0, 0.001, 0.005, 0.01, 0.05]
+    pos_weight_cap:  [5.0, 10.0, 20.0, 30.0]
+
+  - learning_rate:   [1e-5, 3e-5, 1e-4, 3e-4]
+    attn_hidden_dim: [128, 256, 512]
+    head_dropout:    [0.1, 0.2, 0.3, 0.4]
+    attn_dropout:    [0.1, 0.2, 0.3]
+    lambda_hier:     [0.0, 0.001, 0.005, 0.01, 0.05]
+    pos_weight_cap:  [5.0, 10.0, 20.0, 30.0]

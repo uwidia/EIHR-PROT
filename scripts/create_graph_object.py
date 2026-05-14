@@ -1,30 +1,45 @@
-from reliability_aware.graph_shard_builder import build_aligned_graph_shards
+"""
+Call with uv run python scripts/create_graph_object.py --paths "specify path to paths config file"
+"""
+
+from utils.graph_shard_builder import build_aligned_graph_shards
 from pathlib import Path
-import reliability_aware.config as config
-from reliability_aware.parser import get_protein_info
-from reliability_aware.graph_shard_builder import build_aligned_graph_shards, process_single_entry
+from utils.config import setup_logging, PROJECT_ROOT
+from utils.parser import get_protein_info
+from utils.graph_shard_builder import build_aligned_graph_shards, process_single_entry
+import yaml
+import argparse
+
+setup_logging()
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--paths", type=str, required=True)
+args = parser.parse_args()
 
 
-config.setup_logging()
+with open(args.paths) as f:
+    paths = yaml.safe_load(f)
+
+esm_manifest_path = PROJECT_ROOT / paths["esm_manifest_path"]
+cleaned_pdb_dir = PROJECT_ROOT / paths["cleaned_pdb_dir"]
+structure_dir = PROJECT_ROOT / paths["structure_dir"]
+output_dir = PROJECT_ROOT / paths["graph_object_output_dir"]
+
 
 def main():
-    ESM_MANIFEST_PATH = config.PROJECT_ROOT / "esm_manifests"
-    CLEANED_PDB_DIR = config.DATA_DIR / f"cleaned_dataset/pdb"
-    STRUCTURE_DIR = config.PROJECT_ROOT / "structures/pdb"
-    OUTPUT_DIR = config.PROJECT_ROOT / "graph_shards"
-
-    for split in ["train", "test", "val"]:   
-        fasta_path = CLEANED_PDB_DIR / f"cleaned_pdb_{split}.fasta" 
-        structure_file = STRUCTURE_DIR / f"pdb_{split}"
-        shard_build_dataset = build_aligned_graph_shards(
-            manifest_path = ESM_MANIFEST_PATH / f"pdb_{split}_manifest.csv" ,
-            fasta_path = fasta_path,
-            structure_dir = structure_file,
-            output_dir = OUTPUT_DIR / f"pdb_{split}",
-            get_protein_info_fn = get_protein_info,
-            process_single_entry_fn = process_single_entry,
-            cutoff = 10.0,
+    for split in ["train", "test", "val"]:
+        fasta_path = cleaned_pdb_dir / f"cleaned_pdb_{split}.fasta"
+        structure_file = structure_dir / f"pdb_{split}"
+        build_aligned_graph_shards(
+            manifest_path=esm_manifest_path / f"pdb_{split}_manifest.csv",
+            fasta_path=fasta_path,
+            structure_dir=structure_file,
+            output_dir=output_dir / f"pdb_{split}",
+            get_protein_info_fn=get_protein_info,
+            process_single_entry_fn=process_single_entry,
+            cutoff=10.0,
         )
+
 
 if __name__ == "__main__":
     main()

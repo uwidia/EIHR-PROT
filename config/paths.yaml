@@ -1,0 +1,30 @@
+
+
+esm_manifest_path: "esm_manifests"
+cleaned_pdb_dir: "data/cleaned_dataset/pdb"
+cleaned_pdb_train: "data/cleaned_dataset/pdb/cleaned_pdb_train.fasta"
+cleaned_val_train: "data/cleaned_dataset/pdb/cleaned_pdb_val.fasta"
+structure_dir: "structures/pdb"
+graph_object_output_dir: "graph_shards"
+go_annotation_path: "data/HEAL_dataset/nrPDB-GO_2019.06.18_annot.tsv"
+obo_path: "data/HEAL_dataset/go-basic.obo"
+PDB_FASTA_DIR = DATA_DIR / "cleaned_dataset/pdb" #name as cleaned_pdb_dir
+
+#training dataset paths
+TRAIN_GRAPH_SHARD_DIR = PROJECT_ROOT / "graph_shards/train"
+TRAIN_HOMOLOGY_SHARD_DIR = PROJECT_ROOT / "diamond/train_homology_shards"
+TRAIN_ESM_SHARD_DIR = PROJECT_ROOT / "esm_embeddings/pdb/pdb_train" 
+TRAIN_MANIFEST_PATH = PROJECT_ROOT / "esm_manifests/pdb_train_manifest.csv"
+TRAIN_DATA = PDB_FASTA_DIR / "cleaned_pdb_train.fasta" #name as train_dataset
+
+#validation dataset paths
+VAL_GRAPH_SHARD_DIR = PROJECT_ROOT / "graph_shards/val"
+VAL_HOMOLOGY_SHARD_DIR = PROJECT_ROOT / "diamond/val_homology_shards"
+VAL_ESM_SHARD_DIR = PROJECT_ROOT / "esm_embeddings/pdb/pdb_val"
+VAL_MANIFEST_PATH = PROJECT_ROOT / "esm_manifests/pdb_val_manifest.csv"
+VAL_DATA = PDB_FASTA_DIR / "cleaned_pdb_val.fasta" #name is now val_dataset
+
+HEAL_DIR = DATA_DIR / "HEAL_dataset"
+STRUCTURE_DIR = PROJECT_ROOT / "structures/pdb"
+OUTPUT_FILE_DIR = DATA_DIR / "cleaned_dataset/pdb" 
+RETAINED_XRAY_IDS = DATA_DIR / "retained_xray_ids_pdb"
