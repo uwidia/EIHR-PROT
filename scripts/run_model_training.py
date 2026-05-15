@@ -12,47 +12,53 @@ from utils import config
 from utils.model_training import build_go_annotation_data, run_model_training
 import utils.model_randomized_search as randomized_search
 from utils.model_training import fit_model
+from utils.generic_loader import build_model_loaders
+from utils.shard_handling import ESMGraphHomologyShardDataset
 
 from models.sequence_only_ablation import (
-    run_one_batch_smoke_test_sequence_only,
+    SequenceOnlyESMShardDataset,
+    make_sequence_only_collate_fn,
     build_seq_only_model,
-    build_sequence_only_loaders,
-)
-from models.reliability_aware_model import (
-    run_one_batch_smoke_test,
-    build_reliability_aware_model,
-    build_reliability_aware_model_loaders,
+    run_one_batch_smoke_test_sequence_only,
 )
 
 from models.structure_only_ablation import (
-    run_one_batch_smoke_test_structure_only,
+    StructureOnlyESMGraphShardDataset,
+    make_structure_only_collate_fn,
     build_structure_only_model,
-    build_structure_only_loaders,
+    run_one_batch_smoke_test_structure_only,
 )
 
 from models.seq_structure_ablation import (
-    run_one_batch_smoke_test_seq_structure,
+    SeqStructureESMGraphShardDataset,
+    make_seq_structure_collate_fn,
     build_seq_structure_model,
-    build_seq_structure_loaders,
+    run_one_batch_smoke_test_seq_structure,
 )
 
 from models.averaging_baseline_ablation import (
-    run_one_batch_smoke_test_averaging,
+    AveragingESMGraphHomologyShardDataset,
+    make_averaging_collate_fn,
     build_averaging_model,
-    build_averaging_loaders,
+    run_one_batch_smoke_test_averaging,
 )
 
 from models.internal_gate_baseline_ablation import (
-    run_one_batch_smoke_test_internal_gate,
+    InternalGateESMGraphHomologyShardDataset,
+    make_internal_gate_collate_fn,
     build_internal_gate_model,
-    build_internal_gate_loaders,
+    run_one_batch_smoke_test_internal_gate,
+)
+
+from models.reliability_aware_model import (
+    multimodal_collate_fn_generator,
+    build_reliability_aware_model,
+    run_one_batch_smoke_test,
 )
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--ablation", type=str, required=True)
 parser.add_argument("--go_aspect", type=str, required=True)
 parser.add_argument("--hparams", type=str, required=True)
-parser.add_argument("--run_type", type=str, required=True)
 parser.add_argument(
     "--ablation",
     type=str.lower,
@@ -116,33 +122,51 @@ go_data = build_go_annotation_data(
 run_parameters = {
     "sequence_only": {
         "build_model_fn": build_seq_only_model,
-        "loader_fn": build_sequence_only_loaders,
+        "dataset_cls": SequenceOnlyESMShardDataset,
+        "dataset_kind": "sequence",
+        "collate_factory": make_sequence_only_collate_fn,
+        "filter_invalid_samples": False,
         "smoke_test_fn": run_one_batch_smoke_test_sequence_only,
     },
     "structure_only": {
         "build_model_fn": build_structure_only_model,
-        "loader_fn": build_structure_only_loaders,
+        "dataset_cls": StructureOnlyESMGraphShardDataset,
+        "dataset_kind": "graph",
+        "collate_factory": make_structure_only_collate_fn,
+        "filter_invalid_samples": True,
         "smoke_test_fn": run_one_batch_smoke_test_structure_only,
-    },
-    "reliability_aware_model": {
-        "build_model_fn": build_reliability_aware_model,
-        "loader_fn": build_reliability_aware_model_loaders,
-        "smoke_test_fn": run_one_batch_smoke_test,
     },
     "seq_structure": {
         "build_model_fn": build_seq_structure_model,
-        "loader_fn": build_seq_structure_loaders,
+        "dataset_cls": SeqStructureESMGraphShardDataset,
+        "dataset_kind": "graph",
+        "collate_factory": make_seq_structure_collate_fn,
+        "filter_invalid_samples": True,
         "smoke_test_fn": run_one_batch_smoke_test_seq_structure,
     },
     "averaging_baseline": {
         "build_model_fn": build_averaging_model,
-        "loader_fn": build_averaging_loaders,
+        "dataset_cls": AveragingESMGraphHomologyShardDataset,
+        "dataset_kind": "graph_homology",
+        "collate_factory": make_averaging_collate_fn,
+        "filter_invalid_samples": True,
         "smoke_test_fn": run_one_batch_smoke_test_averaging,
     },
     "internal_gate_baseline": {
         "build_model_fn": build_internal_gate_model,
-        "loader_fn": build_internal_gate_loaders,
+        "dataset_cls": InternalGateESMGraphHomologyShardDataset,
+        "dataset_kind": "graph_homology",
+        "collate_factory": make_internal_gate_collate_fn,
+        "filter_invalid_samples": True,
         "smoke_test_fn": run_one_batch_smoke_test_internal_gate,
+    },
+    "reliability_aware_model": {
+        "build_model_fn": build_reliability_aware_model,
+        "dataset_cls": ESMGraphHomologyShardDataset,
+        "dataset_kind": "graph_homology",
+        "collate_factory": multimodal_collate_fn_generator,
+        "filter_invalid_samples": True,
+        "smoke_test_fn": run_one_batch_smoke_test,
     },
 }
 
@@ -168,8 +192,14 @@ def main():
         batch_size=batch_size,
     )
 
-    _, _, train_loader, val_loader = run_parameters[ablation]["loader_fn"](
-        **loader_kwargs
+    model_specific_params = run_parameters[ablation]
+
+    _, _, train_loader, val_loader = build_model_loaders(
+        dataset_cls=model_specific_params["dataset_cls"],
+        dataset_kind=model_specific_params["dataset_kind"],
+        collate_factory=model_specific_params["collate_factory"],
+        filter_invalid_samples=model_specific_params["filter_invalid_samples"],
+        **loader_kwargs,
     )
 
     if run_type == "randomized_search":
@@ -195,8 +225,8 @@ def main():
             train_loader=train_loader,
             val_loader=val_loader,
             fit_function=fit_model,
-            build_model_fn=run_parameters[ablation]["build_model_fn"],
-            smoke_test_fn=run_parameters[ablation]["smoke_test_fn"],
+            build_model_fn=model_specific_params["build_model_fn"],
+            smoke_test_fn=model_specific_params["smoke_test_fn"],
             patience=patience,
             base_dir=base_dir_search,
             smoke_test=True,
@@ -219,7 +249,7 @@ def main():
             go_terms=go_data.go_terms,
             child_parent_pairs=go_data.child_parent_pairs,
             ic=go_data.ic,
-            build_model_fn=run_parameters[ablation]["build_model_fn"],
+            build_model_fn=model_specific_params["build_model_fn"],
             fit_function=fit_model,
             device=device,
             final_epochs=final_epochs,

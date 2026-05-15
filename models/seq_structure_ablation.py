@@ -269,6 +269,8 @@ def run_one_batch_smoke_test_seq_structure(
 
     This checks shape compatibility and loss finiteness without modifying the
     actual model or optimizer used for training.
+
+    Expects train_loader batches to be dictionaries.
     """
     model_copy = copy.deepcopy(model)
     model_copy.train()
@@ -278,12 +280,11 @@ def run_one_batch_smoke_test_seq_structure(
     child_parent_pairs = child_parent_pairs.to(device)
 
     batch = next(iter(train_loader))
-    padded, mask, graph_batch, targets, _, _ = batch
 
-    padded = padded.to(device)
-    mask = mask.to(device)
-    graph_batch = graph_batch.to(device)
-    targets = targets.to(device)
+    padded = batch["padded"].to(device)
+    mask = batch["mask"].to(device)
+    graph_batch = batch["graph_batch"].to(device)
+    targets = batch["targets"].to(device)
 
     optimizer_copy.zero_grad(set_to_none=True)
 
@@ -297,6 +298,7 @@ def run_one_batch_smoke_test_seq_structure(
     assert (
         probs.shape == targets.shape
     ), f"Shape mismatch: probs={probs.shape}, targets={targets.shape}"
+
     assert (
         outputs["seq_repr"].shape == outputs["graph_repr"].shape
     ), "seq_repr and graph_repr should both be (B, 1280)"
@@ -306,10 +308,12 @@ def run_one_batch_smoke_test_seq_structure(
         targets=targets,
         pos_weight=pos_weight,
     )
+
     hier = hierarchy_loss(
         fused_probs=probs,
         child_parent_pairs=child_parent_pairs,
     )
+
     loss = bce + lambda_hier * hier
 
     if not torch.isfinite(loss):
@@ -325,89 +329,6 @@ def run_one_batch_smoke_test_seq_structure(
     print(f"hier_loss: {hier.item():.6f}")
     print(f"total_loss: {loss.item():.6f}")
     print(f"probs range: {probs.min().item():.6f} to {probs.max().item():.6f}")
-
-
-def build_seq_structure_loaders(
-    train_esm_shard_dir,
-    val_esm_shard_dir,
-    train_graph_shard_dir,
-    val_graph_shard_dir,
-    train_manifest_path,
-    val_manifest_path,
-    train_keep_ids_for_aspect,
-    val_keep_ids_for_aspect,
-    train_label_to_indices,
-    val_label_to_indices,
-    go_terms,
-    batch_size: int = 16,
-    seed: int = 42,
-    active_shards: int = 3,
-    lookahead_factor: int = 3,
-    **kwargs,
-):
-    train_dataset = SeqStructureESMGraphShardDataset(
-        esm_shard_dir=train_esm_shard_dir,
-        graph_shard_dir=train_graph_shard_dir,
-        manifest_path=train_manifest_path,
-        require_graph=True,
-        keep_ids=train_keep_ids_for_aspect,
-    )
-
-    val_dataset = SeqStructureESMGraphShardDataset(
-        esm_shard_dir=val_esm_shard_dir,
-        graph_shard_dir=val_graph_shard_dir,
-        manifest_path=val_manifest_path,
-        require_graph=True,
-        keep_ids=val_keep_ids_for_aspect,
-    )
-
-    print("Filtering train dataset.")
-    train_dataset._filter_invalid_samples()
-
-    print("Filtering validation dataset.")
-    val_dataset._filter_invalid_samples()
-
-    train_batch_sampler = HybridBatchSampler(
-        dataset=train_dataset,
-        batch_size=batch_size,
-        active_shards=active_shards,
-        lookahead_factor=lookahead_factor,
-        drop_last=True,
-        seed=seed,
-    )
-
-    val_batch_sampler = HybridBatchSampler(
-        dataset=val_dataset,
-        batch_size=batch_size,
-        active_shards=active_shards,
-        lookahead_factor=lookahead_factor,
-        drop_last=False,
-        seed=seed,
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_sampler=train_batch_sampler,
-        collate_fn=make_seq_structure_collate_fn(
-            label_to_indices=train_label_to_indices,
-            num_go_terms=len(go_terms),
-        ),
-        num_workers=0,
-        pin_memory=True,
-    )
-
-    val_loader = DataLoader(
-        val_dataset,
-        batch_sampler=val_batch_sampler,
-        collate_fn=make_seq_structure_collate_fn(
-            label_to_indices=val_label_to_indices,
-            num_go_terms=len(go_terms),
-        ),
-        num_workers=0,
-        pin_memory=True,
-    )
-
-    return train_dataset, val_dataset, train_loader, val_loader
 
 
 def build_seq_structure_model(sample_hparams, go_terms, device):

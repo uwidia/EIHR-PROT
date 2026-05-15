@@ -373,92 +373,6 @@ def multimodal_collate_fn_generator(label_to_indices, num_go_terms):
     return multimodal_collate_fn
 
 
-def build_reliability_aware_model_loaders(
-    train_esm_shard_dir,
-    val_esm_shard_dir,
-    train_graph_shard_dir,
-    val_graph_shard_dir,
-    train_manifest_path,
-    val_manifest_path,
-    train_homology_shard_dir,
-    val_homology_shard_dir,
-    train_keep_ids_for_aspect,
-    val_keep_ids_for_aspect,
-    train_label_to_indices,
-    val_label_to_indices,
-    go_terms,
-    batch_size: int = 16,
-    seed: int = 42,
-    active_shards: int = 3,
-    lookahead_factor: int = 3,
-    **kwargs,
-):
-
-    train_dataset = ESMGraphHomologyShardDataset(
-        esm_shard_dir=train_esm_shard_dir,
-        graph_shard_dir=train_graph_shard_dir,
-        homology_shard_dir=train_homology_shard_dir,
-        manifest_path=train_manifest_path,
-        require_graph=True,
-        keep_ids=train_keep_ids_for_aspect,
-    )
-
-    val_dataset = ESMGraphHomologyShardDataset(
-        esm_shard_dir=val_esm_shard_dir,
-        graph_shard_dir=val_graph_shard_dir,
-        homology_shard_dir=val_homology_shard_dir,
-        manifest_path=val_manifest_path,
-        require_graph=True,
-        keep_ids=val_keep_ids_for_aspect,
-    )
-
-    print("Filtering train dataset...")
-    train_dataset._filter_invalid_samples()
-
-    print("Filtering validation dataset...")
-    val_dataset._filter_invalid_samples()
-
-    train_batch_sampler = HybridBatchSampler(
-        dataset=train_dataset,
-        batch_size=batch_size,
-        active_shards=active_shards,
-        lookahead_factor=lookahead_factor,
-        drop_last=True,
-        seed=seed,
-    )
-
-    val_batch_sampler = HybridBatchSampler(
-        dataset=val_dataset,
-        batch_size=batch_size,
-        active_shards=active_shards,
-        lookahead_factor=lookahead_factor,
-        drop_last=False,
-        seed=seed,
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_sampler=train_batch_sampler,
-        collate_fn=multimodal_collate_fn_generator(
-            label_to_indices=train_label_to_indices, num_go_terms=len(go_terms)
-        ),
-        num_workers=0,
-        pin_memory=True,
-    )
-
-    val_loader = DataLoader(
-        val_dataset,
-        batch_sampler=val_batch_sampler,
-        collate_fn=multimodal_collate_fn_generator(
-            label_to_indices=val_label_to_indices, num_go_terms=len(go_terms)
-        ),
-        num_workers=0,
-        pin_memory=True,
-    )
-
-    return train_dataset, val_dataset, train_loader, val_loader
-
-
 def build_reliability_aware_model(sample_hparams, go_terms, device):
 
     seq_branch = ESMSequenceBranch(attn_dropout=sample_hparams["attn_dropout"])
@@ -489,6 +403,11 @@ def run_one_batch_smoke_test(
     lambda_hier,
     device,
 ):
+    """
+    Smoke test for the full reliability-aware model.
+
+    Expects train_loader batches to be dictionaries.
+    """
     model_copy = copy.deepcopy(model)
     model_copy.train()
     optimizer_copy = torch.optim.AdamW(model_copy.parameters(), lr=1e-4)
@@ -497,23 +416,13 @@ def run_one_batch_smoke_test(
     child_parent_pairs = child_parent_pairs.to(device)
 
     batch = next(iter(train_loader))
-    (
-        padded,
-        mask,
-        graph_batch,
-        homology_scores,
-        gate_features,
-        targets,
-        global_indices,
-        labels,
-    ) = batch
 
-    padded = padded.to(device)
-    mask = mask.to(device)
-    graph_batch = graph_batch.to(device)
-    homology_scores = homology_scores.to(device)
-    gate_features = gate_features.to(device)
-    targets = targets.to(device)
+    padded = batch["padded"].to(device)
+    mask = batch["mask"].to(device)
+    graph_batch = batch["graph_batch"].to(device)
+    homology_scores = batch["homology_scores"].to(device)
+    gate_features = batch["gate_features"].to(device)
+    targets = batch["targets"].to(device)
 
     optimizer_copy.zero_grad(set_to_none=True)
 
@@ -525,24 +434,36 @@ def run_one_batch_smoke_test(
         gate_features=gate_features,
     )
 
-    fused_probs = outputs["fused_probs"]
+    probs = outputs["probs"]
 
     assert (
-        fused_probs.shape == targets.shape
-    ), f"Shape mismatch: fused_probs={fused_probs.shape}, targets={targets.shape}"
+        probs.shape == targets.shape
+    ), f"Shape mismatch: probs={probs.shape}, targets={targets.shape}"
+
     assert (
         homology_scores.shape == targets.shape
     ), f"Shape mismatch: homology_scores={homology_scores.shape}, targets={targets.shape}"
+
     assert (
         gate_features.shape[1] == 8
     ), f"Expected gate_features shape (B, 8), got {gate_features.shape}"
 
+    assert outputs["gate_weights"].shape == (
+        targets.shape[0],
+        2,
+    ), f"Expected gate_weights shape (B, 2), got {outputs['gate_weights'].shape}"
+
     bce = weighted_bce_on_probs(
-        probs=fused_probs, targets=targets, pos_weight=pos_weight
+        probs=probs,
+        targets=targets,
+        pos_weight=pos_weight,
     )
+
     hier = hierarchy_loss(
-        fused_probs=fused_probs, child_parent_pairs=child_parent_pairs
+        fused_probs=probs,
+        child_parent_pairs=child_parent_pairs,
     )
+
     loss = bce + lambda_hier * hier
 
     if not torch.isfinite(loss):
@@ -557,6 +478,9 @@ def run_one_batch_smoke_test(
     print(f"bce_loss: {bce.item():.6f}")
     print(f"hier_loss: {hier.item():.6f}")
     print(f"total_loss: {loss.item():.6f}")
+    print(f"probs range: {probs.min().item():.6f} to {probs.max().item():.6f}")
     print(
-        f"fused_probs range: {fused_probs.min().item():.6f} to {fused_probs.max().item():.6f}"
+        "mean gate weights: "
+        f"neural={outputs['gate_weights'][:, 0].mean().item():.4f}, "
+        f"homology={outputs['gate_weights'][:, 1].mean().item():.4f}"
     )

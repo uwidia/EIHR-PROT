@@ -72,12 +72,22 @@ def make_internal_gate_collate_fn(
     """
     Collate for sequence + structure + homology internal-gate batches.
 
-    Returns:
-        padded, mask, graph_batch, homology_scores, targets, global_indices, labels
+    Returns a standardized batch dictionary:
+        {
+            "padded": padded,
+            "mask": mask,
+            "graph_batch": graph_batch,
+            "homology_scores": homology_scores,
+            "gate_features": None,
+            "targets": targets,
+            "global_indices": global_indices,
+            "labels": labels,
+        }
 
-    The padded/mask tensors feed the sequence branch. The graph_batch feeds the
-    GAT branch. The homology_scores tensor is fused with neural probabilities
-    by a learned gate that only sees internal neural features.
+    The padded/mask tensors feed the sequence branch.
+    The graph_batch feeds the GAT branch.
+    The homology_scores tensor is fused with neural probabilities by a learned
+    gate that only sees internal neural features.
 
     No external reliability indicator tensor q is built or returned.
     """
@@ -100,7 +110,7 @@ def make_internal_gate_collate_fn(
         targets = torch.zeros(len(batch), num_go_terms, dtype=torch.float32)
 
         pyg_graphs = []
-        homology_scores = []
+        homology_score_list = []
 
         for i, (item, rep, graph, label) in enumerate(zip(batch, reps, graphs, labels)):
             if graph is None:
@@ -134,13 +144,13 @@ def make_internal_gate_collate_fn(
                 )
             )
 
-            homology_scores = item["homology_scores"].float()
-            if homology_scores.shape[0] != num_go_terms:
+            homology_score = item["homology_scores"].float()
+            if homology_score.shape[0] != num_go_terms:
                 raise ValueError(
-                    f"Homology prior size mismatch for {label}: "
-                    f"expected {num_go_terms}, got {homology_scores.shape[0]}"
+                    f"Homology score size mismatch for {label}: "
+                    f"expected {num_go_terms}, got {homology_score.shape[0]}"
                 )
-            homology_scores.append(homology_scores)
+            homology_score_list.append(homology_score)
 
             idxs = label_to_indices.get(label)
             if idxs is None:
@@ -149,23 +159,18 @@ def make_internal_gate_collate_fn(
                 targets[i, list(idxs)] = 1.0
 
         graph_batch = Batch.from_data_list(pyg_graphs)
-        homology_scores = torch.stack(homology_scores, dim=0)
+        homology_scores = torch.stack(homology_score_list, dim=0)
 
-        homology_scores = None
-        gate_features = None
-
-        batch = {
+        return {
             "padded": padded,
             "mask": mask,
             "graph_batch": graph_batch,
             "homology_scores": homology_scores,
-            "gate_features": gate_features,
+            "gate_features": None,
             "targets": targets,
             "global_indices": global_indices,
             "labels": labels,
         }
-
-        return batch
 
     return collate
 
@@ -314,6 +319,8 @@ def run_one_batch_smoke_test_internal_gate(
 
     This verifies shape compatibility and loss finiteness without modifying the
     actual model or optimizer used for training.
+
+    Expects train_loader batches to be dictionaries.
     """
     model_copy = copy.deepcopy(model)
     model_copy.train()
@@ -323,13 +330,12 @@ def run_one_batch_smoke_test_internal_gate(
     child_parent_pairs = child_parent_pairs.to(device)
 
     batch = next(iter(train_loader))
-    padded, mask, graph_batch, homology_scores, targets, _, _ = batch
 
-    padded = padded.to(device)
-    mask = mask.to(device)
-    graph_batch = graph_batch.to(device)
-    homology_scores = homology_scores.to(device)
-    targets = targets.to(device)
+    padded = batch["padded"].to(device)
+    mask = batch["mask"].to(device)
+    graph_batch = batch["graph_batch"].to(device)
+    homology_scores = batch["homology_scores"].to(device)
+    targets = batch["targets"].to(device)
 
     optimizer_copy.zero_grad(set_to_none=True)
 
@@ -339,41 +345,49 @@ def run_one_batch_smoke_test_internal_gate(
         graph_batch=graph_batch,
         homology_scores=homology_scores,
     )
-    fused_probs = outputs["fused_probs"]
+
+    probs = outputs["probs"]
 
     assert (
-        fused_probs.shape == targets.shape
-    ), f"Shape mismatch: fused_probs={fused_probs.shape}, targets={targets.shape}"
+        probs.shape == targets.shape
+    ), f"Shape mismatch: probs={probs.shape}, targets={targets.shape}"
+
     assert outputs["neural_probs"].shape == targets.shape, (
         f"Shape mismatch: neural_probs={outputs['neural_probs'].shape}, "
         f"targets={targets.shape}"
     )
+
     assert homology_scores.shape == targets.shape, (
         f"Shape mismatch: homology_scores={homology_scores.shape}, "
         f"targets={targets.shape}"
     )
+
     assert outputs["gate_weights"].shape == (targets.shape[0], 2), (
         f"Gate shape mismatch: gate_weights={outputs['gate_weights'].shape}, "
         f"expected={(targets.shape[0], 2)}"
     )
+
     assert torch.allclose(
         outputs["gate_weights"].sum(dim=1),
         torch.ones(targets.shape[0], device=device),
         atol=1e-5,
     ), "Gate weights should sum to 1 for each sample"
+
     assert (
         outputs["seq_repr"].shape == outputs["graph_repr"].shape
     ), "seq_repr and graph_repr should both be (B, 1280)"
 
     bce = weighted_bce_on_probs(
-        probs=fused_probs,
+        probs=probs,
         targets=targets,
         pos_weight=pos_weight,
     )
+
     hier = hierarchy_loss(
-        fused_probs=fused_probs,
+        fused_probs=probs,
         child_parent_pairs=child_parent_pairs,
     )
+
     loss = bce + lambda_hier * hier
 
     if not torch.isfinite(loss):
@@ -388,102 +402,12 @@ def run_one_batch_smoke_test_internal_gate(
     print(f"bce_loss: {bce.item():.6f}")
     print(f"hier_loss: {hier.item():.6f}")
     print(f"total_loss: {loss.item():.6f}")
-    print(
-        f"fused_probs range: {fused_probs.min().item():.6f} "
-        f"to {fused_probs.max().item():.6f}"
-    )
+    print(f"probs range: {probs.min().item():.6f} to {probs.max().item():.6f}")
     print(
         "mean gate weights: "
         f"neural={outputs['gate_weights'][:, 0].mean().item():.4f}, "
         f"homology={outputs['gate_weights'][:, 1].mean().item():.4f}"
     )
-
-
-def build_internal_gate_loaders(
-    train_esm_shard_dir,
-    val_esm_shard_dir,
-    train_graph_shard_dir,
-    val_graph_shard_dir,
-    train_manifest_path,
-    val_manifest_path,
-    train_homology_shard_dir,
-    val_homology_shard_dir,
-    train_keep_ids_for_aspect,
-    val_keep_ids_for_aspect,
-    train_label_to_indices,
-    val_label_to_indices,
-    go_terms,
-    batch_size: int = 16,
-    seed: int = 42,
-    active_shards: int = 3,
-    lookahead_factor: int = 3,
-    **kwargs,
-):
-    train_dataset = InternalGateESMGraphHomologyShardDataset(
-        esm_shard_dir=train_esm_shard_dir,
-        graph_shard_dir=train_graph_shard_dir,
-        homology_shard_dir=train_homology_shard_dir,
-        manifest_path=train_manifest_path,
-        require_graph=True,
-        keep_ids=train_keep_ids_for_aspect,
-    )
-
-    val_dataset = InternalGateESMGraphHomologyShardDataset(
-        esm_shard_dir=val_esm_shard_dir,
-        graph_shard_dir=val_graph_shard_dir,
-        homology_shard_dir=val_homology_shard_dir,
-        manifest_path=val_manifest_path,
-        require_graph=True,
-        keep_ids=val_keep_ids_for_aspect,
-    )
-
-    print("Filtering train dataset.")
-    train_dataset._filter_invalid_samples()
-
-    print("Filtering validation dataset.")
-    val_dataset._filter_invalid_samples()
-
-    train_batch_sampler = HybridBatchSampler(
-        dataset=train_dataset,
-        batch_size=batch_size,
-        active_shards=active_shards,
-        lookahead_factor=lookahead_factor,
-        drop_last=True,
-        seed=seed,
-    )
-
-    val_batch_sampler = HybridBatchSampler(
-        dataset=val_dataset,
-        batch_size=batch_size,
-        active_shards=active_shards,
-        lookahead_factor=lookahead_factor,
-        drop_last=False,
-        seed=seed,
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_sampler=train_batch_sampler,
-        collate_fn=make_internal_gate_collate_fn(
-            label_to_indices=train_label_to_indices,
-            num_go_terms=len(go_terms),
-        ),
-        num_workers=0,
-        pin_memory=True,
-    )
-
-    val_loader = DataLoader(
-        val_dataset,
-        batch_sampler=val_batch_sampler,
-        collate_fn=make_internal_gate_collate_fn(
-            label_to_indices=val_label_to_indices,
-            num_go_terms=len(go_terms),
-        ),
-        num_workers=0,
-        pin_memory=True,
-    )
-
-    return train_dataset, val_dataset, train_loader, val_loader
 
 
 def build_internal_gate_model(sample_hparams, go_terms, device):

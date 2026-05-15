@@ -184,9 +184,8 @@ def run_one_batch_smoke_test_sequence_only(
     """
     Runs a single forward+backward pass on a fresh copy of the model to verify
     shapes and loss finiteness. Does NOT modify the original model or optimizer.
+    Expects train_loader batches to be dictionaries.
     """
-    # FIX 1: removed @torch.no_grad() — gradients are needed for backward().
-    # FIX 2: use a detached copy so the real model/optimizer are not touched.
     model_copy = copy.deepcopy(model)
     model_copy.train()
     optimizer_copy = torch.optim.AdamW(model_copy.parameters(), lr=1e-4)
@@ -195,11 +194,10 @@ def run_one_batch_smoke_test_sequence_only(
     child_parent_pairs = child_parent_pairs.to(device)
 
     batch = next(iter(train_loader))
-    padded, mask, targets, _, _ = batch
 
-    padded = padded.to(device)
-    mask = mask.to(device)
-    targets = targets.to(device)
+    padded = batch["padded"].to(device)
+    mask = batch["mask"].to(device)
+    targets = batch["targets"].to(device)
 
     optimizer_copy.zero_grad(set_to_none=True)
 
@@ -222,6 +220,7 @@ def run_one_batch_smoke_test_sequence_only(
     )
 
     loss = bce + lambda_hier * hier
+
     if not torch.isfinite(loss):
         raise RuntimeError(f"Non-finite loss detected: {loss.item()}")
 
@@ -235,73 +234,6 @@ def run_one_batch_smoke_test_sequence_only(
     print(f"hier_loss: {hier.item():.6f}")
     print(f"total_loss: {loss.item():.6f}")
     print(f"probs range: {probs.min().item():.6f} to {probs.max().item():.6f}")
-
-
-def build_sequence_only_loaders(
-    train_esm_shard_dir,
-    val_esm_shard_dir,
-    train_manifest_path,
-    val_manifest_path,
-    train_keep_ids_for_aspect,
-    val_keep_ids_for_aspect,
-    train_label_to_indices,
-    val_label_to_indices,
-    go_terms,
-    batch_size: int = 16,
-    seed: int = 42,
-    **kwargs,
-):
-    train_dataset = SequenceOnlyESMShardDataset(
-        shard_dir=train_esm_shard_dir,
-        manifest_path=train_manifest_path,
-        keep_ids=train_keep_ids_for_aspect,
-    )
-
-    val_dataset = SequenceOnlyESMShardDataset(
-        shard_dir=val_esm_shard_dir,
-        manifest_path=val_manifest_path,
-        keep_ids=val_keep_ids_for_aspect,
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_sampler=HybridBatchSampler(
-            dataset=train_dataset,
-            batch_size=batch_size,
-            active_shards=3,
-            lookahead_factor=2,
-            drop_last=True,
-            seed=seed,
-        ),
-        collate_fn=make_sequence_only_collate_fn(
-            global_idx_to_label=train_dataset.global_idx_to_label,
-            label_to_indices=train_label_to_indices,
-            num_go_terms=len(go_terms),
-        ),
-        num_workers=0,
-        pin_memory=True,
-    )
-
-    val_loader = DataLoader(
-        val_dataset,
-        batch_sampler=HybridBatchSampler(
-            dataset=val_dataset,
-            batch_size=batch_size,
-            active_shards=3,
-            lookahead_factor=2,
-            drop_last=False,
-            seed=seed,
-        ),
-        collate_fn=make_sequence_only_collate_fn(
-            global_idx_to_label=val_dataset.global_idx_to_label,
-            label_to_indices=val_label_to_indices,
-            num_go_terms=len(go_terms),
-        ),
-        num_workers=0,
-        pin_memory=True,
-    )
-
-    return train_dataset, val_dataset, train_loader, val_loader
 
 
 def build_seq_only_model(sample_hparams, go_terms, device):

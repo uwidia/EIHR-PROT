@@ -100,12 +100,6 @@ def make_structure_only_collate_fn(
         )
 
         lengths = [r.shape[0] for r in reps]
-        max_len = max(lengths)
-        dim = reps[0].shape[1]
-        dtype = reps[0].dtype
-
-        padded = torch.zeros(len(batch), max_len, dim, dtype=dtype)
-        mask = torch.zeros(len(batch), max_len, dtype=torch.bool)
         targets = torch.zeros(len(batch), num_go_terms, dtype=torch.float32)
 
         pyg_graphs = []
@@ -121,8 +115,6 @@ def make_structure_only_collate_fn(
                 )
 
             L = rep.shape[0]
-            padded[i, :L] = rep
-            mask[i, :L] = True
 
             edge_attr = torch.cat(
                 [
@@ -149,15 +141,12 @@ def make_structure_only_collate_fn(
 
         graph_batch = Batch.from_data_list(pyg_graphs)
 
-        homology_scores = None
-        gate_features = None
-
         batch = {
-            "padded": padded,
-            "mask": mask,
+            "padded": None,
+            "mask": None,
             "graph_batch": graph_batch,
-            "homology_scores": homology_scores,
-            "gate_features": gate_features,
+            "homology_scores": None,
+            "gate_features": None,
             "targets": targets,
             "global_indices": global_indices,
             "labels": labels,
@@ -215,6 +204,7 @@ def run_one_batch_smoke_test_structure_only(
 ):
     """
     Runs a single forward/backward pass on a deep copy of the model.
+    Expects train_loader batches to be dictionaries.
     """
     model_copy = copy.deepcopy(model)
     model_copy.train()
@@ -224,10 +214,9 @@ def run_one_batch_smoke_test_structure_only(
     child_parent_pairs = child_parent_pairs.to(device)
 
     batch = next(iter(train_loader))
-    _, _, graph_batch, targets, _, _ = batch
 
-    graph_batch = graph_batch.to(device)
-    targets = targets.to(device)
+    graph_batch = batch["graph_batch"].to(device)
+    targets = batch["targets"].to(device)
 
     optimizer_copy.zero_grad(set_to_none=True)
 
@@ -237,6 +226,7 @@ def run_one_batch_smoke_test_structure_only(
     assert (
         probs.shape == targets.shape
     ), f"Shape mismatch: probs={probs.shape}, targets={targets.shape}"
+
     assert (
         outputs["graph_repr"].shape[0] == targets.shape[0]
     ), "Batch dimension mismatch between graph_repr and targets"
@@ -246,10 +236,12 @@ def run_one_batch_smoke_test_structure_only(
         targets=targets,
         pos_weight=pos_weight,
     )
+
     hier = hierarchy_loss(
         fused_probs=probs,
         child_parent_pairs=child_parent_pairs,
     )
+
     loss = bce + lambda_hier * hier
 
     if not torch.isfinite(loss):
@@ -265,89 +257,6 @@ def run_one_batch_smoke_test_structure_only(
     print(f"hier_loss: {hier.item():.6f}")
     print(f"total_loss: {loss.item():.6f}")
     print(f"probs range: {probs.min().item():.6f} to {probs.max().item():.6f}")
-
-
-def build_structure_only_loaders(
-    train_esm_shard_dir,
-    val_esm_shard_dir,
-    train_graph_shard_dir,
-    val_graph_shard_dir,
-    train_manifest_path,
-    val_manifest_path,
-    train_keep_ids_for_aspect,
-    val_keep_ids_for_aspect,
-    train_label_to_indices,
-    val_label_to_indices,
-    go_terms,
-    batch_size: int = 16,
-    seed: int = 42,
-    active_shards: int = 3,
-    lookahead_factor: int = 3,
-    **kwargs,
-):
-    train_dataset = StructureOnlyESMGraphShardDataset(
-        esm_shard_dir=train_esm_shard_dir,
-        graph_shard_dir=train_graph_shard_dir,
-        manifest_path=train_manifest_path,
-        require_graph=True,
-        keep_ids=train_keep_ids_for_aspect,
-    )
-
-    val_dataset = StructureOnlyESMGraphShardDataset(
-        esm_shard_dir=val_esm_shard_dir,
-        graph_shard_dir=val_graph_shard_dir,
-        manifest_path=val_manifest_path,
-        require_graph=True,
-        keep_ids=val_keep_ids_for_aspect,
-    )
-
-    print("Filtering train dataset.")
-    train_dataset._filter_invalid_samples()
-
-    print("Filtering validation dataset.")
-    val_dataset._filter_invalid_samples()
-
-    train_batch_sampler = HybridBatchSampler(
-        dataset=train_dataset,
-        batch_size=batch_size,
-        active_shards=active_shards,
-        lookahead_factor=lookahead_factor,
-        drop_last=True,
-        seed=seed,
-    )
-
-    val_batch_sampler = HybridBatchSampler(
-        dataset=val_dataset,
-        batch_size=batch_size,
-        active_shards=active_shards,
-        lookahead_factor=lookahead_factor,
-        drop_last=False,
-        seed=seed,
-    )
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_sampler=train_batch_sampler,
-        collate_fn=make_structure_only_collate_fn(
-            label_to_indices=train_label_to_indices,
-            num_go_terms=len(go_terms),
-        ),
-        num_workers=0,
-        pin_memory=True,
-    )
-
-    val_loader = DataLoader(
-        val_dataset,
-        batch_sampler=val_batch_sampler,
-        collate_fn=make_structure_only_collate_fn(
-            label_to_indices=val_label_to_indices,
-            num_go_terms=len(go_terms),
-        ),
-        num_workers=0,
-        pin_memory=True,
-    )
-
-    return train_dataset, val_dataset, train_loader, val_loader
 
 
 def build_structure_only_model(sample_hparams, go_terms, device):
