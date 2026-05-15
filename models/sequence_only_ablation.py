@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import average_precision_score
 from torch.utils.data import DataLoader
-
+from utils.model_training import train_one_epoch
 from utils.shard_handling import ESMShardDataset
 from models.reliability_aware_model import HybridBatchSampler
 from utils.pool_embeddings import ESMSequenceBranch, NeuralLogitHead
@@ -113,7 +113,22 @@ def make_sequence_only_collate_fn(
             if idxs:
                 targets[i, list(idxs)] = 1.0
 
-        return padded, mask, targets, global_indices, labels
+        graph_batch = None
+        homology_scores = None
+        gate_features = None
+
+        batch = {
+            "padded": padded,
+            "mask": mask,
+            "graph_batch": graph_batch,
+            "homology_scores": homology_scores,
+            "gate_features": gate_features,
+            "targets": targets,
+            "global_indices": global_indices,
+            "labels": labels,
+        }
+
+        return batch
 
     return collate
 
@@ -222,237 +237,6 @@ def run_one_batch_smoke_test_sequence_only(
     print(f"probs range: {probs.min().item():.6f} to {probs.max().item():.6f}")
 
 
-def train_one_epoch_sequence_only(
-    model,
-    loader,
-    optimizer,
-    pos_weight,
-    child_parent_pairs,
-    lambda_hier,
-    device,
-):
-    model.train()
-    total_loss = 0.0
-    n_batches = 0
-
-    # FIX 3: move pos_weight and child_parent_pairs to device once, outside the loop.
-    pos_weight = pos_weight.to(device)
-    child_parent_pairs = child_parent_pairs.to(device)
-
-    for padded, mask, targets, _, _ in loader:
-        padded = padded.to(device)
-        mask = mask.to(device)
-        targets = targets.to(device)
-
-        optimizer.zero_grad(set_to_none=True)
-
-        outputs = model(padded=padded, mask=mask)
-
-        bce_loss = weighted_bce_on_probs(
-            probs=outputs["probs"],
-            targets=targets,
-            pos_weight=pos_weight,
-        )
-        hier_loss = hierarchy_loss(
-            fused_probs=outputs["probs"],
-            child_parent_pairs=child_parent_pairs,
-        )
-        loss = bce_loss + lambda_hier * hier_loss
-
-        if not torch.isfinite(loss):
-            raise RuntimeError(f"Non-finite loss detected: {loss.item()}")
-
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item()
-        n_batches += 1
-
-    return total_loss / max(n_batches, 1)
-
-
-@torch.no_grad()
-def evaluate_sequence_only(
-    model,
-    loader,
-    pos_weight,
-    child_parent_pairs,
-    lambda_hier,
-    ic,
-    device,
-):
-    model.eval()
-    total_loss = 0.0
-    bce_total = 0.0
-    hier_total = 0.0
-    n_batches = 0
-
-    all_probs = []
-    all_targets = []
-
-    # FIX 3: move pos_weight and child_parent_pairs to device once, outside the loop.
-    pos_weight = pos_weight.to(device)
-    child_parent_pairs = child_parent_pairs.to(device)
-
-    for padded, mask, targets, _, _ in loader:
-        padded = padded.to(device)
-        mask = mask.to(device)
-        targets = targets.to(device)
-
-        outputs = model(padded=padded, mask=mask)
-
-        bce_loss = weighted_bce_on_probs(
-            probs=outputs["probs"],
-            targets=targets,
-            pos_weight=pos_weight,
-        )
-        hier_loss = hierarchy_loss(
-            fused_probs=outputs["probs"],
-            child_parent_pairs=child_parent_pairs,
-        )
-        loss = bce_loss + lambda_hier * hier_loss
-
-        total_loss += loss.item()
-        bce_total += bce_loss.item()
-        hier_total += hier_loss.item()
-        n_batches += 1
-
-        all_probs.append(outputs["probs"].detach().cpu())
-        all_targets.append(targets.detach().cpu())
-
-    y_prob = torch.cat(all_probs, dim=0)
-    y_true = torch.cat(all_targets, dim=0)
-
-    fmax = fmax_score(y_true, y_prob)
-    smin = smin_score(y_true, y_prob, ic)
-    aupr = average_precision_score(y_true.numpy().ravel(), y_prob.numpy().ravel())
-
-    return {
-        "val_loss": total_loss / max(n_batches, 1),
-        "bce_loss": bce_total / max(n_batches, 1),
-        "hierarchy_loss": hier_total / max(n_batches, 1),
-        "Fmax": fmax["Fmax"],
-        "Fmax_threshold": fmax["threshold"],
-        "AUPR": float(aupr),
-        "Smin_raw": smin["raw"]["Smin"],
-        "Smin_threshold_raw": smin["raw"]["threshold"],
-        "Smin_normalized": smin["normalized"]["Smin"],
-        "Smin_threshold_normalized": smin["normalized"]["threshold"],
-    }
-
-
-def fit_sequence_only(
-    model,
-    train_loader,
-    val_loader,
-    optimizer,
-    pos_weight,
-    child_parent_pairs,
-    ic,
-    device,
-    *,
-    lambda_hier: float = 0.0,
-    num_epochs: int = 100,
-    patience: int = 10,
-    out_dir: str | Path = "runs/sequence_only",
-):
-    """
-    Standard training loop for the ablation.
-
-    lambda_hier defaults to 0.0 for a clean sequence-only BCE baseline.
-    Set it > 0 if you want to keep the hierarchy regularizer for comparability.
-    """
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    history = {
-        "train_loss": [],
-        "val_loss": [],
-        "val_Fmax": [],
-        "val_AUPR": [],
-        "val_Smin_raw": [],
-        "val_Smin_normalized": [],
-        "val_Smin_raw_threshold": [],
-        "val_Smin_normalized_threshold": [],
-        "val_Fmax_threshold": [],
-    }
-
-    best_fmax = -1.0
-    best_epoch = -1  # FIX 5: track best epoch for early stopping message.
-    bad_epochs = 0
-    best_path = out_dir / "best_model.pt"
-    history_path = out_dir / "history.pt"  # FIX 4: save history incrementally.
-
-    for epoch in range(1, num_epochs + 1):
-        if hasattr(train_loader, "batch_sampler") and hasattr(
-            train_loader.batch_sampler, "set_epoch"
-        ):
-            train_loader.batch_sampler.set_epoch(epoch)
-
-        train_loss = train_one_epoch_sequence_only(
-            model=model,
-            loader=train_loader,
-            optimizer=optimizer,
-            pos_weight=pos_weight,
-            child_parent_pairs=child_parent_pairs,
-            lambda_hier=lambda_hier,
-            device=device,
-        )
-
-        val_metrics = evaluate_sequence_only(
-            model=model,
-            loader=val_loader,
-            pos_weight=pos_weight,
-            child_parent_pairs=child_parent_pairs,
-            lambda_hier=lambda_hier,
-            ic=ic,
-            device=device,
-        )
-
-        history["train_loss"].append(train_loss)
-        history["val_loss"].append(val_metrics["val_loss"])
-        history["val_Fmax"].append(val_metrics["Fmax"])
-        history["val_AUPR"].append(val_metrics["AUPR"])
-        history["val_Smin_raw"].append(val_metrics["Smin_raw"])
-        history["val_Smin_normalized"].append(val_metrics["Smin_normalized"])
-        history["val_Smin_raw_threshold"].append(val_metrics["Smin_threshold_raw"])
-        history["val_Smin_normalized_threshold"].append(
-            val_metrics["Smin_threshold_normalized"]
-        )
-        history["val_Fmax_threshold"].append(val_metrics["Fmax_threshold"])
-
-        # FIX 4: save history after every epoch so it's never lost on interruption.
-        torch.save(history, history_path)
-
-        current_fmax = val_metrics["Fmax"]
-        if current_fmax > best_fmax:
-            best_fmax = current_fmax
-            best_epoch = epoch  # FIX 5
-            bad_epochs = 0
-            torch.save(model.state_dict(), best_path)
-        else:
-            bad_epochs += 1
-
-        if epoch % 10 == 0:
-            print(
-                f"Epoch {epoch:03d} | "
-                f"train_loss={train_loss:.4f} | "
-                f"val_loss={val_metrics['val_loss']:.4f} | "
-                f"Fmax={val_metrics['Fmax']:.4f} | "
-                f"AUPR={val_metrics['AUPR']:.4f} | "
-                f"Smin_raw={val_metrics['Smin_raw']:.4f}"
-            )
-
-        if bad_epochs >= patience:
-            print(f"Early stopping at epoch {epoch}. Best epoch: {best_epoch}")  # FIX 5
-            break
-
-    if best_path.exists():
-        model.load_state_dict(torch.load(best_path))
-
-    return history
-
-
 def build_sequence_only_loaders(
     train_esm_shard_dir,
     val_esm_shard_dir,
@@ -465,6 +249,7 @@ def build_sequence_only_loaders(
     go_terms,
     batch_size: int = 16,
     seed: int = 42,
+    **kwargs,
 ):
     train_dataset = SequenceOnlyESMShardDataset(
         shard_dir=train_esm_shard_dir,

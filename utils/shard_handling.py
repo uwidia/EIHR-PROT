@@ -47,10 +47,10 @@ from collections import defaultdict
 class ESMGraphHomologyShardDataset(Dataset):
     def __init__(
         self,
-        esm_shard_dir: str,
-        graph_shard_dir: str,
-        homology_shard_dir: str,
-        manifest_path: str,
+        esm_shard_dir: str | Path,
+        graph_shard_dir: str | Path,
+        homology_shard_dir: str | Path,
+        manifest_path: str | Path,
         keep_ids=None,
         require_graph: bool = True,
     ):
@@ -94,7 +94,7 @@ class ESMGraphHomologyShardDataset(Dataset):
             "graph": a["graph"],
             "label": a["label"],
             "global_idx": a["global_idx"],
-            "homology_prior": h["prior"].float(),
+            "homology_scores": h["prior"].float(),
             "homology_gate": h["homology_gate"].float(),
         }
 
@@ -154,9 +154,9 @@ class ESMGraphShardDataset(Dataset):
 
     def __init__(
         self,
-        esm_shard_dir: str,
-        graph_shard_dir: str,
-        manifest_path: str,
+        esm_shard_dir: str | Path,
+        graph_shard_dir: str | Path,
+        manifest_path: str | Path,
         esm_cache_size: int = 2,
         graph_cache_size: int = 4,
         require_graph: bool = True,

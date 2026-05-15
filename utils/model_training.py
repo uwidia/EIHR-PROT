@@ -6,21 +6,24 @@ run_seq_only_training: Wrapper for sequence-only ablation
 
 from __future__ import annotations
 from copy import deepcopy
+import copy
 from pathlib import Path
 import torch
 from utils.parser import get_protein_info
 
-from models.sequence_only_ablation import (
-    SequenceOnlyProteinFunctionModel,
-    build_sequence_only_loaders,
-    fit_sequence_only,
+from utils.losses import (
+    compute_pos_weight_from_label_indices,
+    weighted_bce_on_probs,
+    hierarchy_loss,
 )
-from utils.losses import compute_pos_weight_from_label_indices
 from utils.go_term_extraction import (
     build_subject_go_index,
     build_go_annotations_list,
     build_child_parent_idx_pairs,
 )
+from sklearn.metrics import average_precision_score
+from utils.metrics import fmax_score, smin_score
+
 from dataclasses import dataclass
 
 
@@ -35,6 +38,87 @@ class GOAnnotationData:
     val_label_to_indices: dict
     train_keep_ids: set
     val_keep_ids: set
+
+
+def run_model_training(
+    promising_hparams: list[dict],
+    *,
+    train_loader,
+    val_loader,
+    train_keep_ids_for_aspect,
+    train_label_to_indices,
+    go_terms,
+    child_parent_pairs,
+    ic,
+    build_model_fn,
+    fit_function,
+    device,
+    final_epochs: int = 50,
+    patience: int = 10,
+    base_dir: str | Path = "runs/final",
+) -> dict | None:
+    """
+    Trains each promising hyperparameter configuration to convergence.
+    Returns the record for the best final run.
+    """
+    base_dir = Path(base_dir)
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    results = []
+    best_score = -1.0
+    best_run = None
+
+    for run_id, hparams in enumerate(promising_hparams):
+        run_dir = base_dir / f"run_{run_id:03d}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"\n{'='*60}")
+        print(f"[Final] Run {run_id+1}/{len(promising_hparams)}  hparams={hparams}")
+        print(f"{'='*60}")
+
+        pos_weight = compute_pos_weight_from_label_indices(
+            label_to_indices=train_label_to_indices,
+            num_go_terms=len(go_terms),
+            train_ids=train_keep_ids_for_aspect,
+            cap=hparams["pos_weight_cap"],
+        )
+
+        model, optimizer = build_model_fn(hparams, go_terms, device)
+
+        history = fit_function(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            optimizer=optimizer,
+            pos_weight=pos_weight.to(device),
+            child_parent_pairs=child_parent_pairs.to(device),
+            ic=ic,
+            device=device,
+            lambda_hier=hparams["lambda_hier"],
+            num_epochs=final_epochs,
+            patience=patience,
+            out_dir=run_dir,
+        )
+
+        record = build_record(run_id, history, hparams, id_key="run_id")
+        best_score, best_run = save_and_track_best(
+            record=record,
+            records=results,
+            best_score=best_score,
+            best_record=best_run,
+            save_path=run_dir / "final_meta.pt",
+            best_save_path=base_dir / "best_final_run.pt",
+        )
+
+        print(f"[Run {run_id+1:03d}] val_Fmax={record['score']:.4f}")
+        if best_run is record:
+            print(f"  *** New best: {best_score:.4f} ***")
+
+    print(f"\n[Final training complete] Best val_Fmax: {best_score:.4f}")
+    if best_run:
+        print(f"Best run hparams: {best_run['hparams']}")
+
+    return best_run
 
 
 def build_go_annotation_data(
@@ -162,114 +246,306 @@ def build_record(
     }
 
 
-# Sequence Only Training Wrapper
-def run_seq_only_ablation_training(
-    promising_hparams: list[dict],
-    *,
-    train_esm_shard_dir,
-    val_esm_shard_dir,
-    train_manifest_path,
-    val_manifest_path,
-    train_keep_ids_for_aspect,
-    val_keep_ids_for_aspect,
-    train_label_to_indices,
-    val_label_to_indices,
-    go_terms,
+def train_one_epoch(
+    model,
+    loader,
+    optimizer,
+    pos_weight,
+    child_parent_pairs,
+    lambda_hier,
+    device,
+):
+    model.train()
+    total_loss = 0.0
+    n_batches = 0
+
+    pos_weight = pos_weight.to(device)
+    child_parent_pairs = child_parent_pairs.to(device)
+
+    for batch in loader:
+        batch = move_batch_to_device(batch, device)
+
+        optimizer.zero_grad(set_to_none=True)
+
+        outputs = model_forward_from_batch(model, batch)
+        probs = outputs["probs"]
+
+        bce_loss = weighted_bce_on_probs(
+            probs=probs,
+            targets=batch["targets"],
+            pos_weight=pos_weight,
+        )
+        hier_loss = hierarchy_loss(
+            fused_probs=probs,
+            child_parent_pairs=child_parent_pairs,
+        )
+        loss = bce_loss + lambda_hier * hier_loss
+
+        if not torch.isfinite(loss):
+            raise RuntimeError(f"Non-finite loss detected: {loss.item()}")
+
+        loss.backward()
+        optimizer.step()
+
+        total_loss += loss.item()
+        n_batches += 1
+
+    return total_loss / max(n_batches, 1)
+
+
+def model_forward_from_batch(model, batch):
+    inputs = {}
+
+    if batch.get("padded") is not None:
+        inputs["padded"] = batch["padded"]
+    if batch.get("mask") is not None:
+        inputs["mask"] = batch["mask"]
+    if batch.get("graph_batch") is not None:
+        inputs["graph_batch"] = batch["graph_batch"]
+    if batch.get("homology_scores") is not None:
+        inputs["homology_scores"] = batch["homology_scores"]
+    if batch.get("gate_features") is not None:
+        inputs["gate_features"] = batch["gate_features"]
+
+    return model(**inputs)
+
+
+def move_batch_to_device(batch: dict, device):
+    for key in [
+        "padded",
+        "mask",
+        "graph_batch",
+        "homology_scores",
+        "gate_features",
+        "targets",
+    ]:
+        if batch.get(key) is not None:
+            batch[key] = batch[key].to(device)
+
+    return batch
+
+
+def _history_key(metric_name: str) -> str:
+    """
+    Converts validation metric names into history keys.
+
+    Examples:
+        "val_loss" -> "val_loss"
+        "Fmax" -> "val_Fmax"
+        "AUPR" -> "val_AUPR"
+        "mean_neural_gate" -> "val_mean_neural_gate"
+    """
+    if metric_name.startswith("val_"):
+        return metric_name
+    return f"val_{metric_name}"
+
+
+def fit_model(
+    model,
+    train_loader,
+    val_loader,
+    optimizer,
+    pos_weight,
     child_parent_pairs,
     ic,
     device,
-    final_epochs: int = 50,
+    *,
+    lambda_hier: float = 0.01,
+    num_epochs: int = 100,
     patience: int = 10,
-    batch_size: int = 16,
-    base_dir: str | Path = "runs/seq_only_final",
-) -> dict:
+    out_dir: str | Path = "runs/model",
+    hparams: dict | None = None,
+    checkpoint_extra: dict | None = None,
+):
     """
-    Takes the specified list of promising hyperparameter combinations and trains each to
-    convergence. Returns the record for the best final run.
+    Generic fit loop for all ablations.
+
+    Requirements:
+      - train_loader and val_loader return standardized dict batches.
+      - model.forward returns a dict with outputs["probs"].
+      - evaluate_fn returns a dict containing at least "Fmax".
     """
-    base_dir = Path(base_dir)
-    base_dir.mkdir(parents=True, exist_ok=True)
 
-    _, _, train_loader, val_loader = build_sequence_only_loaders(
-        train_esm_shard_dir=train_esm_shard_dir,
-        val_esm_shard_dir=val_esm_shard_dir,
-        train_manifest_path=train_manifest_path,
-        val_manifest_path=val_manifest_path,
-        train_keep_ids_for_aspect=train_keep_ids_for_aspect,
-        val_keep_ids_for_aspect=val_keep_ids_for_aspect,
-        train_label_to_indices=train_label_to_indices,
-        val_label_to_indices=val_label_to_indices,
-        go_terms=go_terms,
-        batch_size=batch_size,
-    )
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    results = []
-    best_score = -1.0
-    best_run = {}
+    history = {
+        "train_loss": [],
+    }
 
-    for run_id, hparams in enumerate(promising_hparams):
-        run_dir = base_dir / f"run_{run_id:03d}"
-        run_dir.mkdir(parents=True, exist_ok=True)
+    best_fmax = -1.0
+    best_epoch = -1
+    bad_epochs = 0
 
-        print(f"\n{'='*60}")
-        print(f"[Final] Run {run_id+1}/{len(promising_hparams)}")
-        print(f"{'='*60}")
+    best_path = out_dir / "best_model.pt"
+    history_path = out_dir / "history.pt"
 
-        pos_weight = compute_pos_weight_from_label_indices(
-            label_to_indices=train_label_to_indices,
-            num_go_terms=len(go_terms),
-            train_ids=train_keep_ids_for_aspect,
-            cap=hparams["pos_weight_cap"],
-        )
+    checkpoint_extra = checkpoint_extra or {}
 
-        model = SequenceOnlyProteinFunctionModel(
-            num_go_terms=len(go_terms),
-            attn_hidden_dim=hparams["attn_hidden_dim"],
-            attn_dropout=hparams["attn_dropout"],
-            head_dropout=hparams["head_dropout"],
-        ).to(device)
+    for epoch in range(1, num_epochs + 1):
+        if hasattr(train_loader, "batch_sampler") and hasattr(
+            train_loader.batch_sampler, "set_epoch"
+        ):
+            train_loader.batch_sampler.set_epoch(epoch)
 
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=hparams["learning_rate"],
-            weight_decay=1e-4,
-        )
-
-        history = fit_sequence_only(
+        train_loss = train_one_epoch(
             model=model,
-            train_loader=train_loader,
-            val_loader=val_loader,
+            loader=train_loader,
             optimizer=optimizer,
-            pos_weight=pos_weight.to(device),
-            child_parent_pairs=child_parent_pairs.to(device),
+            pos_weight=pos_weight,
+            child_parent_pairs=child_parent_pairs,
+            lambda_hier=lambda_hier,
+            device=device,
+        )
+
+        val_metrics = evaluate_model(
+            model=model,
+            loader=val_loader,
+            pos_weight=pos_weight,
+            child_parent_pairs=child_parent_pairs,
+            lambda_hier=lambda_hier,
             ic=ic,
             device=device,
-            lambda_hier=hparams["lambda_hier"],
-            num_epochs=final_epochs,
-            patience=patience,
-            out_dir=run_dir,
         )
 
-        score = max(history["val_Fmax"])
-        record = {
-            "run_id": run_id,
-            "score": score,
-            "history": history,
-            "hparams": deepcopy(hparams),
-        }
+        history["train_loss"].append(train_loss)
 
-        torch.save(record, run_dir / "final_meta.pt")
-        results.append(record)
+        for metric_name, metric_value in val_metrics.items():
+            key = _history_key(metric_name)
+            history.setdefault(key, []).append(metric_value)
 
-        print(f"[Run {run_id+1:03d}] val_Fmax={score:.4f}")
+        torch.save(history, history_path)
 
-        if score > best_score:
-            best_score = score
-            best_run = record
-            torch.save(record, base_dir / "best_final_run.pt")
-            print(f"  *** New best final run: {best_score:.4f} ***")
+        current_fmax = val_metrics["Fmax"]
 
-    print(f"\n[Final training complete] Best val_Fmax: {best_score:.4f}")
-    print(f"Best run hparams: {best_run['hparams']}")
+        if current_fmax > best_fmax:
+            best_fmax = current_fmax
+            best_epoch = epoch
+            bad_epochs = 0
 
-    return best_run
+            checkpoint = {
+                "epoch": epoch,
+                "model_state_dict": copy.deepcopy(model.state_dict()),
+                "optimizer_state_dict": copy.deepcopy(optimizer.state_dict()),
+                "val_metrics": val_metrics,
+                "train_loss": train_loss,
+                "hparams": hparams,
+            }
+            checkpoint.update(checkpoint_extra)
+
+            torch.save(checkpoint, best_path)
+
+        else:
+            bad_epochs += 1
+
+        if epoch % 10 == 0:
+            message = (
+                f"Epoch {epoch:03d} | "
+                f"train_loss={train_loss:.4f} | "
+                f"val_loss={val_metrics['val_loss']:.4f} | "
+                f"Fmax={val_metrics['Fmax']:.4f} | "
+                f"AUPR={val_metrics['AUPR']:.4f} | "
+                f"Smin_raw={val_metrics['Smin_raw']:.4f}"
+            )
+
+            if "mean_neural_gate" in val_metrics:
+                message += (
+                    f" | gate_n={val_metrics['mean_neural_gate']:.3f}"
+                    f" | gate_h={val_metrics['mean_homology_gate']:.3f}"
+                )
+
+            print(message)
+
+        if bad_epochs >= patience:
+            print(f"Early stopping at epoch {epoch}. Best epoch: {best_epoch}")
+            break
+
+    if best_path.exists():
+        checkpoint = torch.load(best_path, map_location=device)
+        model.load_state_dict(checkpoint["model_state_dict"])
+
+    return history
+
+
+@torch.no_grad()
+def evaluate_model(
+    model,
+    loader,
+    pos_weight,
+    child_parent_pairs,
+    lambda_hier,
+    ic,
+    device,
+):
+    model.eval()
+
+    total_loss = 0.0
+    bce_total = 0.0
+    hier_total = 0.0
+    n_batches = 0
+
+    all_probs = []
+    all_targets = []
+    all_gate_weights = []
+
+    pos_weight = pos_weight.to(device)
+    child_parent_pairs = child_parent_pairs.to(device)
+
+    for batch in loader:
+        batch = move_batch_to_device(batch, device)
+
+        outputs = model_forward_from_batch(model, batch)
+        probs = outputs["probs"]
+        targets = batch["targets"]
+
+        bce_loss = weighted_bce_on_probs(
+            probs=probs,
+            targets=targets,
+            pos_weight=pos_weight,
+        )
+        hier_loss = hierarchy_loss(
+            fused_probs=probs,
+            child_parent_pairs=child_parent_pairs,
+        )
+        loss = bce_loss + lambda_hier * hier_loss
+
+        total_loss += loss.item()
+        bce_total += bce_loss.item()
+        hier_total += hier_loss.item()
+        n_batches += 1
+
+        all_probs.append(probs.detach().cpu())
+        all_targets.append(targets.detach().cpu())
+
+        if "gate_weights" in outputs:
+            all_gate_weights.append(outputs["gate_weights"].detach().cpu())
+
+    if not all_probs:
+        raise RuntimeError("No batches were produced by the validation loader.")
+
+    y_prob = torch.cat(all_probs, dim=0)
+    y_true = torch.cat(all_targets, dim=0)
+
+    fmax = fmax_score(y_true, y_prob)
+    smin = smin_score(y_true, y_prob, ic)
+    aupr = average_precision_score(y_true.numpy().ravel(), y_prob.numpy().ravel())
+
+    metrics = {
+        "val_loss": total_loss / max(n_batches, 1),
+        "bce_loss": bce_total / max(n_batches, 1),
+        "hierarchy_loss": hier_total / max(n_batches, 1),
+        "Fmax": fmax["Fmax"],
+        "Fmax_threshold": fmax["threshold"],
+        "AUPR": float(aupr),
+        "Smin_raw": smin["raw"]["Smin"],
+        "Smin_threshold_raw": smin["raw"]["threshold"],
+        "Smin_normalized": smin["normalized"]["Smin"],
+        "Smin_threshold_normalized": smin["normalized"]["threshold"],
+    }
+
+    if all_gate_weights:
+        gate_weights = torch.cat(all_gate_weights, dim=0)
+        metrics["mean_neural_gate"] = float(gate_weights[:, 0].mean().item())
+        metrics["mean_homology_gate"] = float(gate_weights[:, 1].mean().item())
+
+    return metrics

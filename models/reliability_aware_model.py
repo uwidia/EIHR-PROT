@@ -9,6 +9,7 @@ from collections import deque
 import random
 import logging
 from torch_geometric.data import Data, Batch
+from utils.model_training import train_one_epoch
 from utils.pool_embeddings import FusionMLP, NeuralLogitHead
 from utils.metrics import fmax_score, smin_score
 from sklearn.metrics import average_precision_score
@@ -114,6 +115,7 @@ class ReliabilityAwareProteinFunctionModel(nn.Module):
         fused_probs = alpha_n * neural_probs + alpha_h * homology_scores
 
         return {
+            "probs": fused_probs,
             "fused_probs": fused_probs,
             "neural_logits": neural_logits,
             "homology_scores": homology_scores,
@@ -295,7 +297,7 @@ def multimodal_collate_fn_generator(label_to_indices, num_go_terms):
             mask[i, :L] = True
 
         pyg_graphs = []
-        homology_priors = []
+        homology_scores = []
         gate_features = []
 
         targets = torch.zeros(len(batch), num_go_terms, dtype=torch.float32)
@@ -327,7 +329,7 @@ def multimodal_collate_fn_generator(label_to_indices, num_go_terms):
             )
             pyg_graphs.append(data)
 
-            homology_priors.append(item["homology_prior"].float())
+            homology_scores.append(item["homology_scores"].float())
 
             mean_conf = torch.tensor(
                 float(graph["mean_confidence"]), dtype=torch.float32
@@ -352,281 +354,23 @@ def multimodal_collate_fn_generator(label_to_indices, num_go_terms):
                 targets[i, idxs] = 1.0
 
         graph_batch = Batch.from_data_list(pyg_graphs)
-        homology_priors = torch.stack(homology_priors, dim=0)
+        homology_scores = torch.stack(homology_scores, dim=0)
         gate_features = torch.stack(gate_features, dim=0)
 
-        return (
-            padded,
-            mask,
-            graph_batch,
-            homology_priors,
-            gate_features,
-            targets,
-            global_indices,
-            labels,
-        )
+        batch = {
+            "padded": padded,
+            "mask": mask,
+            "graph_batch": graph_batch,
+            "homology_scores": homology_scores,
+            "gate_features": gate_features,
+            "targets": targets,
+            "global_indices": global_indices,
+            "labels": labels,
+        }
+
+        return batch
 
     return multimodal_collate_fn
-
-
-def train_one_epoch(
-    model,
-    loader,
-    optimizer,
-    pos_weight,
-    child_parent_pairs,
-    lambda_hier,
-    device,
-):
-    model.train()
-    total_loss = 0.0
-    n_batches = 0
-
-    for (
-        padded,
-        mask,
-        graph_batch,
-        homology_priors,
-        gate_features,
-        targets,
-        global_indices,
-        labels,
-    ) in loader:
-        padded = padded.to(device)
-        mask = mask.to(device)
-        graph_batch = graph_batch.to(device)
-        homology_priors = homology_priors.to(device)
-        gate_features = gate_features.to(device)
-        targets = targets.to(device)
-
-        optimizer.zero_grad(set_to_none=True)
-
-        outputs = model(
-            padded=padded,
-            mask=mask,
-            graph_batch=graph_batch,
-            homology_scores=homology_priors,
-            gate_features=gate_features,
-        )
-
-        bce_loss = weighted_bce_on_probs(
-            outputs["fused_probs"],
-            targets,
-            pos_weight,
-        )
-        hier_loss = hierarchy_loss(
-            outputs["fused_probs"],
-            child_parent_pairs,
-        )
-        loss = bce_loss + lambda_hier * hier_loss
-
-        if not torch.isfinite(loss):
-            raise RuntimeError(f"Non-finite loss: {loss.item()}")
-
-        loss.backward()
-        optimizer.step()
-
-        total_loss += loss.item()
-        n_batches += 1
-
-    return total_loss / max(n_batches, 1)
-
-
-@torch.no_grad()
-def evaluate_model(
-    model,
-    loader,
-    pos_weight,
-    child_parent_pairs,
-    lambda_hier,
-    ic,
-    device,
-):
-    model.eval()
-    total_loss = 0.0
-    bce_loss_total = 0.0
-    hier_loss_total = 0.0
-    n_batches = 0
-    all_probs = []
-    all_targets = []
-
-    for (
-        padded,
-        mask,
-        graph_batch,
-        homology_priors,
-        gate_features,
-        targets,
-        global_indices,
-        labels,
-    ) in loader:
-        padded = padded.to(device)
-        mask = mask.to(device)
-        graph_batch = graph_batch.to(device)
-        homology_priors = homology_priors.to(device)
-        gate_features = gate_features.to(device)
-        targets = targets.to(device)
-
-        outputs = model(
-            padded=padded,
-            mask=mask,
-            graph_batch=graph_batch,
-            homology_scores=homology_priors,
-            gate_features=gate_features,
-        )
-
-        bce_loss = weighted_bce_on_probs(
-            outputs["fused_probs"],
-            targets,
-            pos_weight,
-        )
-        hier_loss = hierarchy_loss(
-            outputs["fused_probs"],
-            child_parent_pairs,
-        )
-        loss = bce_loss + lambda_hier * hier_loss
-
-        total_loss += loss.item()
-        n_batches += 1
-
-        bce_loss_total += bce_loss.item()
-        hier_loss_total += hier_loss.item()
-
-        all_probs.append(outputs["fused_probs"].detach().cpu())
-        all_targets.append(targets.detach().cpu())
-
-    y_prob = torch.cat(all_probs, dim=0)
-    y_true = torch.cat(all_targets, dim=0)
-
-    fmax = fmax_score(y_true, y_prob)
-    smin = smin_score(y_true, y_prob, ic)
-    aupr = average_precision_score(
-        y_true.numpy().ravel(),
-        y_prob.numpy().ravel(),
-    )
-
-    return {
-        "val_loss": total_loss / max(n_batches, 1),
-        "bce_loss": bce_loss_total / max(n_batches, 1),
-        "hierarchy_loss": hier_loss_total / max(n_batches, 1),
-        "Fmax": fmax["Fmax"],
-        "Fmax_threshold": fmax["threshold"],
-        "AUPR": float(aupr),
-        "Smin_raw": smin["raw"]["Smin"],
-        "Smin_threshold_raw": smin["raw"]["threshold"],
-        "Smin_normalized": smin["normalized"]["Smin"],
-        "Smin_threshold_normalized": smin["normalized"]["threshold"],
-    }
-
-
-def fit_reliability_aware_model(
-    model,
-    train_loader,
-    val_loader,
-    optimizer,
-    pos_weight,
-    child_parent_pairs,
-    ic,
-    device,
-    *,
-    lambda_hier: float = 0.01,
-    num_epochs: int = 100,
-    patience: int = 10,
-    out_dir: str | Path = "runs/go_train",
-    hparams: dict | None = None,
-):
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    history = {
-        "train_loss": [],
-        "val_loss": [],
-        "val_Fmax": [],
-        "val_AUPR": [],
-        "val_Smin_raw": [],
-        "val_Smin_normalized": [],
-        "val_Smin_raw_threshold": [],
-        "val_Smin_normalized_threshold": [],
-        "val_Fmax_threshold": [],
-    }
-
-    best_fmax = -1.0
-    best_epoch = -1
-    bad_epochs = 0
-    best_path = out_dir / "best_model.pt"
-    history_path = out_dir / "history.pt"
-
-    print(device)
-    for epoch in range(1, num_epochs + 1):
-        print(f"epoch {epoch} currently running...")
-        train_loss = train_one_epoch(
-            model=model,
-            loader=train_loader,
-            optimizer=optimizer,
-            pos_weight=pos_weight,
-            child_parent_pairs=child_parent_pairs,
-            lambda_hier=lambda_hier,
-            device=device,
-        )
-
-        val_metrics = evaluate_model(
-            model=model,
-            loader=val_loader,
-            pos_weight=pos_weight,
-            child_parent_pairs=child_parent_pairs,
-            lambda_hier=lambda_hier,
-            ic=ic,
-            device=device,
-        )
-
-        history["train_loss"].append(train_loss)
-        history["val_loss"].append(val_metrics["val_loss"])
-        history["val_Fmax"].append(val_metrics["Fmax"])
-        history["val_AUPR"].append(val_metrics["AUPR"])
-        history["val_Smin_raw"].append(val_metrics["Smin_raw"])
-        history["val_Smin_normalized"].append(val_metrics["Smin_normalized"])
-        history["val_Smin_raw_threshold"].append(val_metrics["Smin_threshold_raw"])
-        history["val_Smin_normalized_threshold"].append(
-            val_metrics["Smin_threshold_normalized"]
-        )
-        history["val_Fmax_threshold"].append(val_metrics["Fmax_threshold"])
-
-        torch.save(history, history_path)
-
-        if val_metrics["Fmax"] > best_fmax:
-            best_fmax = val_metrics["Fmax"]
-            best_epoch = epoch
-            bad_epochs = 0
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model_state_dict": copy.deepcopy(model.state_dict()),
-                    "optimizer_state_dict": copy.deepcopy(optimizer.state_dict()),
-                    "val_metrics": val_metrics,
-                    "train_loss": train_loss,
-                    "hparams": hparams,
-                },
-                best_path,
-            )
-        else:
-            bad_epochs += 1
-
-        if epoch % 10 == 0:
-            print(
-                f"Epoch {epoch:03d} | "
-                f"train_loss={train_loss:.4f} | "
-                f"val_loss={val_metrics['val_loss']:.4f} | "
-                f"Fmax={val_metrics['Fmax']:.4f} | "
-                f"AUPR={val_metrics['AUPR']:.4f} | "
-                f"Smin={val_metrics['Smin_raw']:.4f} | "
-                f"Smin (normalized)={val_metrics['Smin_normalized']:.4f}"
-            )
-
-        if bad_epochs >= patience:
-            print(f"Early stopping at epoch {epoch}. Best epoch: {best_epoch}")
-            break
-
-    return history
 
 
 def build_reliability_aware_model_loaders(
@@ -647,6 +391,7 @@ def build_reliability_aware_model_loaders(
     seed: int = 42,
     active_shards: int = 3,
     lookahead_factor: int = 3,
+    **kwargs,
 ):
 
     train_dataset = ESMGraphHomologyShardDataset(
@@ -756,7 +501,7 @@ def run_one_batch_smoke_test(
         padded,
         mask,
         graph_batch,
-        homology_priors,
+        homology_scores,
         gate_features,
         targets,
         global_indices,
@@ -766,7 +511,7 @@ def run_one_batch_smoke_test(
     padded = padded.to(device)
     mask = mask.to(device)
     graph_batch = graph_batch.to(device)
-    homology_priors = homology_priors.to(device)
+    homology_scores = homology_scores.to(device)
     gate_features = gate_features.to(device)
     targets = targets.to(device)
 
@@ -776,7 +521,7 @@ def run_one_batch_smoke_test(
         padded=padded,
         mask=mask,
         graph_batch=graph_batch,
-        homology_scores=homology_priors,
+        homology_scores=homology_scores,
         gate_features=gate_features,
     )
 
@@ -786,8 +531,8 @@ def run_one_batch_smoke_test(
         fused_probs.shape == targets.shape
     ), f"Shape mismatch: fused_probs={fused_probs.shape}, targets={targets.shape}"
     assert (
-        homology_priors.shape == targets.shape
-    ), f"Shape mismatch: homology_priors={homology_priors.shape}, targets={targets.shape}"
+        homology_scores.shape == targets.shape
+    ), f"Shape mismatch: homology_scores={homology_scores.shape}, targets={targets.shape}"
     assert (
         gate_features.shape[1] == 8
     ), f"Expected gate_features shape (B, 8), got {gate_features.shape}"
