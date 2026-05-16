@@ -22,6 +22,7 @@ dependencies = [
     "goatools>=1.6.4",
     "scikit-learn>=1.8.0",
     "pyyaml>=6.0.3",
+    "wandb>=0.27.0",
 ]
 
 [tool.uv.extra-build-dependencies]
