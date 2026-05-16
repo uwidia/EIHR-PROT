@@ -1,0 +1,25 @@
+num_trials: 15
+trial_epochs: 6
+top_k_params: 5
+patience: 10
+base_dir_search: "runs/search/seq_structure"
+base_dir_final: "runs/final/seq_structure"
+final_epochs: 60
+
+use_wandb: true
+wandb_project: reliability-aware-pfp
+wandb_entity: null 
+wandb_mode: online 
+
+search_space:
+  learning_rate: [0.0001, 0.0003, 0.001]
+  weight_decay: [0.0, 0.0001]
+  dropout: [0.2, 0.3, 0.4]
+  attn_hidden_dim: [256]
+  attn_dropout: [0.1, 0.2]
+  head_dropout: [0.2, 0.3]
+  fusion_hidden_dim: [512, 1024]
+  fusion_out_dim: [512]
+  pos_weight_cap: [10.0, 20.0]
+  lambda_hier: [0.01, 0.05, 0.1] #set to fixed value later
+

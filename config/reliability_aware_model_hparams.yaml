@@ -6,14 +6,19 @@ base_dir_search: "runs/search/reliability_aware"
 base_dir_final: "runs/final/reliability_aware"
 final_epochs: 60
 
+use_wandb: true
+wandb_project: reliability-aware-pfp
+wandb_entity: null 
+wandb_mode: online 
 
 
 search_space:
-  learning_rate: [1e-5, 3e-5, 1e-4, 3e-4]
-  fusion_hidden_dim: [512, 768, 1024, 1536]
-  lambda_hier: [0.001, 0.005, 0.01, 0.05, 0.1]
-  pos_weight_cap: [5.0, 10.0, 20.0, 30.0]
-  dropout: [0.1, 0.2, 0.3, 0.4]
+  learning_rate: [3e-5, 1e-4, 3e-4]
+  fusion_hidden_dim: [512, 1024]
+  lambda_hier: [0.005, 0.01, 0.05]
+  pos_weight_cap: [10.0, 20.0]
+  dropout: [0.2, 0.3]
+  weight_decay: [0.0, 0.0001]
 
 promising_hparams:
   - learning_rate: 1e-3
