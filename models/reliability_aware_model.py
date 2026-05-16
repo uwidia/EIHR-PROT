@@ -389,7 +389,7 @@ def build_reliability_aware_model(sample_hparams, go_terms, device):
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=sample_hparams["learning_rate"],
-        weight_decay=1e-4,
+        weight_decay=float(sample_hparams.get("weight_decay", 1e-4)),
     )
 
     return model, optimizer
