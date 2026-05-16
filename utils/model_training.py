@@ -8,7 +8,9 @@ from __future__ import annotations
 from copy import deepcopy
 import copy
 from pathlib import Path
+from typing import Literal
 import torch
+import wandb
 from utils.parser import get_protein_info
 
 from utils.losses import (
@@ -56,6 +58,12 @@ def run_model_training(
     final_epochs: int = 50,
     patience: int = 10,
     base_dir: str | Path = "runs/final",
+    use_wandb: bool = False,
+    wandb_project: str = "reliability-aware-pfp",
+    wandb_entity: str | None = None,
+    wandb_mode: str = "online",
+    ablation: str | None = None,
+    run_type: str = "full_training",
 ) -> dict | None:
     """
     Trains each promising hyperparameter configuration to convergence.
@@ -98,6 +106,19 @@ def run_model_training(
             num_epochs=final_epochs,
             patience=patience,
             out_dir=run_dir,
+            hparams=hparams,
+            use_wandb=use_wandb,
+            wandb_project=wandb_project,
+            wandb_entity=wandb_entity,
+            wandb_mode=wandb_mode,
+            wandb_run_name=f"{ablation}_final_{run_id:03d}",
+            wandb_config={
+                "ablation": ablation,
+                "run_type": run_type,
+                "run_id": run_id,
+                "go_terms": len(go_terms),
+                **hparams,
+            },
         )
 
         record = build_record(run_id, history, hparams, id_key="run_id")
@@ -356,6 +377,12 @@ def fit_model(
     out_dir: str | Path = "runs/model",
     hparams: dict | None = None,
     checkpoint_extra: dict | None = None,
+    use_wandb: bool = False,
+    wandb_project: str = "reliability-aware-pfp",
+    wandb_entity: str | None = None,
+    wandb_mode: Literal["online", "offline", "disabled", "shared"] = "online",
+    wandb_run_name: str | None = None,
+    wandb_config: dict | None = None,
 ):
     """
     Generic fit loop for all ablations.
@@ -382,6 +409,19 @@ def fit_model(
 
     checkpoint_extra = checkpoint_extra or {}
 
+    wandb_run = None
+
+    if use_wandb:
+
+        wandb_run = wandb.init(
+            project=wandb_project,
+            entity=wandb_entity,
+            name=wandb_run_name,
+            config=wandb_config or hparams,
+            mode=wandb_mode,
+            reinit=True,
+        )
+
     for epoch in range(1, num_epochs + 1):
         if hasattr(train_loader, "batch_sampler") and hasattr(
             train_loader.batch_sampler, "set_epoch"
@@ -407,6 +447,18 @@ def fit_model(
             ic=ic,
             device=device,
         )
+
+        if wandb_run is not None:
+            wandb_log = {
+                "epoch": epoch,
+                "train_loss": train_loss,
+            }
+
+            for key, value in val_metrics.items():
+                if isinstance(value, (int, float)):
+                    wandb_log[f"val/{key}"] = value
+
+            wandb_run.log(wandb_log, step=epoch)
 
         history["train_loss"].append(train_loss)
 
@@ -463,6 +515,9 @@ def fit_model(
     if best_path.exists():
         checkpoint = torch.load(best_path, map_location=device)
         model.load_state_dict(checkpoint["model_state_dict"])
+
+    if wandb_run is not None:
+        wandb_run.finish()
 
     return history
 

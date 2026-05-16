@@ -33,6 +33,12 @@ def run_randomized_search(
     base_dir: str | Path = "runs/seq_only_search",
     smoke_test: bool = True,
     top_k_params: int = 5,
+    use_wandb: bool = False,
+    wandb_project: str = "reliability-aware-pfp",
+    wandb_entity: str | None = None,
+    wandb_mode: str = "online",
+    ablation: str | None = None,
+    run_type: str = "randomized_search",
 ) -> list[dict]:
     """
     Randomly samples `num_trials` hyperparameter configurations, trains each
@@ -89,6 +95,19 @@ def run_randomized_search(
             num_epochs=trial_epochs,
             patience=patience,
             out_dir=trial_dir,
+            hparams=sample_hparams,
+            use_wandb=use_wandb,
+            wandb_project=wandb_project,
+            wandb_entity=wandb_entity,
+            wandb_mode=wandb_mode,
+            wandb_run_name=f"{ablation}_trial_{trial:03d}",
+            wandb_config={
+                "ablation": ablation,
+                "run_type": run_type,
+                "trial": trial,
+                "go_terms": len(go_terms),
+                **sample_hparams,
+            },
         )
 
         record = build_record(trial, history, sample_hparams)
