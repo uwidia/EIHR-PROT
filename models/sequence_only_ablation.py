@@ -10,14 +10,9 @@ from typing import Mapping, Sequence
 
 import torch
 import torch.nn as nn
-from sklearn.metrics import average_precision_score
-from torch.utils.data import DataLoader
-from utils.model_training import train_one_epoch
-from utils.shard_handling import ESMShardDataset
-from models.reliability_aware_model import HybridBatchSampler
-from utils.pool_embeddings import ESMSequenceBranch, NeuralLogitHead
-from utils.losses import weighted_bce_on_probs, hierarchy_loss
-from utils.metrics import fmax_score, smin_score
+from reliability_aware.utils.shard_handling import ESMShardDataset
+from models.sequence_homology_common import ESMSequenceBranch, SequencePredictionHead
+from reliability_aware.utils.losses import weighted_bce_on_probs, hierarchy_loss
 
 
 class SequenceOnlyESMShardDataset(ESMShardDataset):
@@ -143,6 +138,7 @@ class SequenceOnlyProteinFunctionModel(nn.Module):
         num_go_terms: int,
         attn_hidden_dim: int = 256,
         attn_dropout: float = 0.1,
+        head_hidden_dim: int = 512,
         head_dropout: float = 0.2,
     ):
         super().__init__()
@@ -154,8 +150,9 @@ class SequenceOnlyProteinFunctionModel(nn.Module):
             out_dim=None,
         )
 
-        self.head = NeuralLogitHead(
-            in_dim=1280,
+        self.head = SequencePredictionHead(
+            input_dim=1280,
+            hidden_dim=head_hidden_dim,
             num_go_terms=num_go_terms,
             dropout=head_dropout,
         )
@@ -168,6 +165,8 @@ class SequenceOnlyProteinFunctionModel(nn.Module):
         return {
             "probs": probs,
             "logits": logits,
+            "neural_logits": logits,
+            "neural_probs": probs,
             "seq_repr": seq_repr,
             "seq_attn": seq_attn,
         }
@@ -241,7 +240,10 @@ def build_seq_only_model(sample_hparams, go_terms, device):
         num_go_terms=len(go_terms),
         attn_hidden_dim=int(sample_hparams["attn_hidden_dim"]),
         attn_dropout=float(sample_hparams["attn_dropout"]),
-        head_dropout=float(sample_hparams["head_dropout"]),
+        head_hidden_dim=int(sample_hparams.get("head_hidden_dim", 512)),
+        head_dropout=float(
+            sample_hparams.get("head_dropout", 0.2)
+        ),
     ).to(device)
 
     optimizer = torch.optim.AdamW(

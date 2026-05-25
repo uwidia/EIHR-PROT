@@ -1,6 +1,9 @@
 import argparse
-import utils.extract_esm_embeddings as extract_embeddings
+import reliability_aware.utils.extract_esm_embeddings as extract_embeddings
 
+"""
+uv run python scripts/get_embeddings.py -
+"""
 
 def main():
     parser = argparse.ArgumentParser()
@@ -14,7 +17,7 @@ def main():
     parser.add_argument("--repr_layer", type=int, default=None)
     parser.add_argument("--shard_size", type=int, default=1000)
     parser.add_argument("--use_fp16", action="store_true")
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--device", type=str, default=None)
     args = parser.parse_args()

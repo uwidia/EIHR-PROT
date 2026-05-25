@@ -1,6 +1,11 @@
-import utils.preprocessing as preprocessing
+from utils.preprocessing import save_hash
 import logging
 import utils.config as config
+from utils.parser import get_protein_info
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
+from Bio import SeqIO
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -8,9 +13,7 @@ config.setup_logging()
 
 
 raw_dataset_dir = config.PROJECT_ROOT / "data/HEAL_dataset"
-structure_file_dir = config.PROJECT_ROOT / "structures"
 output_file_dir = config.PROJECT_ROOT / "data/cleaned_dataset"
-retained_xray_ids_dir = config.retained_xray_ids_out_dir
 pipeline_results = {}
 
 
@@ -19,64 +22,41 @@ def main():
         fasta_file_path = (
             raw_dataset_dir / f"nrPDB-GO_2019.06.18_{split}_sequences.fasta"
         )
+
         output_file = output_file_dir / f"cleaned_pdb_{split}"
-        structure_file_dir_per_split = structure_file_dir / f"pdb_{split}"
 
-        if split not in pipeline_results:
-            pipeline_results[split] = {}
+        protein_entries = get_protein_info(fasta_file_path)
+        records = []
+        removed_entries = 0
 
-        # Download PDBset files
-        structure_file_dir_per_split.mkdir(parents=True, exist_ok=True)
+        # check fasta entries for missing or invalid headers and non-alphabet characters in sequence
+        for protein in protein_entries:
+            if not (
+                protein["sequence"].isalpha()
+                and re.fullmatch(r"[A-Za-z0-9-]+", protein["full_id"])
+            ):
+                removed_entries += 1
+                continue
+            record = SeqRecord(
+                Seq(protein["sequence"]), id=protein["full_id"], description=""
+            )
+            records.append(record)
 
-        download_fn = preprocessing.download_one_pdb_structure
+        output_file_dir.mkdir(parents=True, exist_ok=True)
 
-        logger.info(f"Downloading structures for pdb_{split}....")
-        download_result = preprocessing.download_multiple_structures_fast(
-            fasta_file_path, structure_file_dir_per_split, download_fn
-        )
+        save_path = output_file_dir / f"{output_file}.fasta"
 
-        pipeline_results[split]["download"] = download_result
-
-        # Count x-ray derived structures
-        """
-        The count step below has been commented out due to how long it takes to execute. 
-        You can uncomment it if you wish to verify counts yourself
-        """
-        # counts_result = preprocessing.count_methods_per_split(split, save_dir)
-        # pipeline_results[dataset_type][split]["counts"] = counts_result
-
-        # Remove all non-xray derived structure files from each split
-        deleted, failed, missing, retained = preprocessing.delete_non_xray_structures(
-            split, structure_file_dir_per_split
-        )
-
-        filter_result = {
-            "deleted": deleted,
-            "failed": failed,
-            "missing": missing,
-            "retained": retained,
-        }
-
-        pipeline_results[split]["xray_structure_filter"] = filter_result
-
-        # Create new fasta files per split with xray-derived PDBset sequences only
-        retained_xray_ids_path = (
-            config.PROJECT_ROOT / f"data/retained_xray_ids_pdb_{split}.txt"
-        )  # file already created by delete_non_xray_structures function
-
+        SeqIO.write(records, save_path, "fasta")
+        save_hash(save_path)
+        if removed_entries > 0:
+            logger.info(
+                f"""{removed_entries} entries were removed from the data due to missing headers or inclusion of invalid characters in sequence information"""
+            )
         logger.info(
-            f"Non-xray sequences deleted. IDs of retained protein sequences saved to {retained_xray_ids_path}.txt"
+            f"Split:{split} | Previous count: {len(protein_entries)} | Current count: {len(records)} | Removed entries: {removed_entries}"
         )
-
-        preprocessing.filter_xray_struct(
-            retained_xray_ids_path, fasta_file_path, output_file
-        )
-
-        pipeline_results[split]["xray_fasta_sequence_filter"] = {
-            "input_fasta": str(fasta_file_path),
-            "xray_ids": str(retained_xray_ids_path),
-            "output_name": output_file,
-        }
+    logger.info(f"Cleaning completed successfully. Files saved to {output_file_dir}")
+    return "completed"
 
 
 if __name__ == "__main__":

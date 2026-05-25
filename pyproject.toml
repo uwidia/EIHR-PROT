@@ -29,7 +29,7 @@ dependencies = [
 torch-cluster = ["torch"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["utils"]
+packages = ["reliability_aware"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
