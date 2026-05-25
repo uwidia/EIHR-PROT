@@ -1,7 +1,6 @@
 """
 Call with:
-uv run python scripts/ablation_scripts/final_ablation_runs.py --ablation "specify ablation" --go_aspect "select go_aspect" \
-    --hparams "path to specific config file with ablation hyperparameters"
+uv run python scripts/run_model_training.py --ablation "reliability_aware_model" --go_aspect "BP" --hparams "config/reliability_aware_model_hparams.yaml" --run_type "full_training"
 """
 
 import torch
@@ -93,7 +92,7 @@ run_type = args.run_type.lower()
 go_aspect = args.go_aspect.upper()
 go_annotation_path = config.go_annotation_path
 obo_path = config.obo_path
-batch_size = hparams["batch_size"]
+batch_size = 16
 
 train_esm_shard_dir = config.train_esm_shard_dir
 train_graph_shard_dir = config.train_graph_shard_dir
@@ -231,6 +230,12 @@ def main():
             base_dir=base_dir_search,
             smoke_test=True,
             top_k_params=top_k_params,
+            use_wandb=hparams.get("use_wandb", False),
+            wandb_project=hparams.get("wandb_project", "reliability-aware-pfp"),
+            wandb_entity=hparams.get("wandb_entity"),
+            wandb_mode=hparams.get("wandb_mode", "online"),
+            ablation=ablation,
+            run_type=run_type,
         )
 
     elif run_type == "full_training":
@@ -255,6 +260,12 @@ def main():
             final_epochs=final_epochs,
             patience=patience,
             base_dir=base_dir_final,
+            use_wandb=hparams.get("use_wandb", False),
+            wandb_project=hparams.get("wandb_project", "reliability-aware-pfp"),
+            wandb_entity=hparams.get("wandb_entity"),
+            wandb_mode=hparams.get("wandb_mode", "online"),
+            ablation=ablation,
+            run_type=run_type,
         )
 
 

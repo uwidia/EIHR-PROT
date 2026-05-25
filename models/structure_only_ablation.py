@@ -261,7 +261,7 @@ def run_one_batch_smoke_test_structure_only(
 
 def build_structure_only_model(sample_hparams, go_terms, device):
     dropout = float(sample_hparams.get("dropout", 0.2))
-    head_dropout = sample_hparams.get("head_dropout", dropout)
+    head_dropout = float(sample_hparams.get("head_dropout", dropout))
 
     model = StructureOnlyProteinFunctionModel(
         num_go_terms=len(go_terms),
@@ -271,7 +271,7 @@ def build_structure_only_model(sample_hparams, go_terms, device):
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=sample_hparams["learning_rate"],
+        lr=float(sample_hparams["learning_rate"]),
         weight_decay=float(sample_hparams.get("weight_decay", 1e-4)),
     )
 

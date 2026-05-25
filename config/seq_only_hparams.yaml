@@ -1,22 +1,30 @@
 num_trials: 15
 trial_epochs: 6
 top_k_params: 5
-patience: 10
+patience: 150
 base_dir_search: "runs/search/seq_only"
 base_dir_final: "runs/final/seq_only"
-final_epochs: 60
+final_epochs: 120
 
 use_wandb: true
 wandb_project: reliability-aware-pfp
 wandb_entity: null 
-wandb_mode: online 
+wandb_mode: offline 
 
 search_space:
   learning_rate:   [3e-5, 1e-4, 3e-4]
   attn_hidden_dim: [256]
   head_dropout:    [0.2, 0.3]
   attn_dropout:    [0.1, 0.2]
-  lambda_hier: [0.01, 0.05, 0.1] #set to fixed value later
+  lambda_hier: [0.005] #set to fixed value later
   pos_weight_cap:  [10.0, 20.0]
   weight_decay:    [0.0, 0.0001]
   
+promising_hparams:
+  - learning_rate:   3e-5
+    attn_hidden_dim: 256
+    head_dropout:    0.3
+    attn_dropout:    0.1
+    lambda_hier: 0.005 #set to fixed value later
+    pos_weight_cap:  10.0
+    weight_decay:    0.0

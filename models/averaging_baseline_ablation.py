@@ -371,7 +371,7 @@ def build_averaging_model(sample_hparams, go_terms, device):
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=sample_hparams["learning_rate"],
+        lr=float(sample_hparams["learning_rate"]),
         weight_decay=float(sample_hparams.get("weight_decay", 1e-4)),
     )
 

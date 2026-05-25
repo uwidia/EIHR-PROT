@@ -423,6 +423,7 @@ def fit_model(
         )
 
     for epoch in range(1, num_epochs + 1):
+        print(f"Currently running epoch {epoch}:")
         if hasattr(train_loader, "batch_sampler") and hasattr(
             train_loader.batch_sampler, "set_epoch"
         ):
@@ -459,6 +460,7 @@ def fit_model(
                     wandb_log[f"val/{key}"] = value
 
             wandb_run.log(wandb_log, step=epoch)
+            print("wandb done for epoch {epoch}")
 
         history["train_loss"].append(train_loss)
 

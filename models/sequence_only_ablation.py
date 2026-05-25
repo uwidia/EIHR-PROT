@@ -239,14 +239,14 @@ def run_one_batch_smoke_test_sequence_only(
 def build_seq_only_model(sample_hparams, go_terms, device):
     model = SequenceOnlyProteinFunctionModel(
         num_go_terms=len(go_terms),
-        attn_hidden_dim=sample_hparams["attn_hidden_dim"],
-        attn_dropout=sample_hparams["attn_dropout"],
-        head_dropout=sample_hparams["head_dropout"],
+        attn_hidden_dim=int(sample_hparams["attn_hidden_dim"]),
+        attn_dropout=float(sample_hparams["attn_dropout"]),
+        head_dropout=float(sample_hparams["head_dropout"]),
     ).to(device)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=sample_hparams["learning_rate"],
+        lr=float(sample_hparams["learning_rate"]),
         weight_decay=float(sample_hparams.get("weight_decay", 1e-4)),
     )
 

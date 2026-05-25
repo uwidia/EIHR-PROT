@@ -375,20 +375,20 @@ def multimodal_collate_fn_generator(label_to_indices, num_go_terms):
 
 def build_reliability_aware_model(sample_hparams, go_terms, device):
 
-    seq_branch = ESMSequenceBranch(attn_dropout=sample_hparams["attn_dropout"])
-    gat_branch = GATBranch(dropout=sample_hparams["dropout"])
+    seq_branch = ESMSequenceBranch(attn_dropout=float(sample_hparams["attn_dropout"]))
+    gat_branch = GATBranch(dropout=float(sample_hparams["attn_dropout"]))
 
     model = ReliabilityAwareProteinFunctionModel(
         seq_branch=seq_branch,
         gat_branch=gat_branch,
         num_go_terms=len(go_terms),
-        fusion_hidden_dim=sample_hparams["fusion_hidden_dim"],
-        dropout=sample_hparams["dropout"],
+        fusion_hidden_dim=int(sample_hparams["fusion_hidden_dim"]),
+        dropout=float(sample_hparams["attn_dropout"]),
     ).to(device)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=sample_hparams["learning_rate"],
+        lr=float(sample_hparams["learning_rate"]),
         weight_decay=float(sample_hparams.get("weight_decay", 1e-4)),
     )
 
