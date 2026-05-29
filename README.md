@@ -49,25 +49,12 @@ The full end-to-end multimodal predictor is **not finished yet**. The Final GO c
   - scalar attention pooling over residue embeddings
   - pooled sequence representation from variable-length residue embeddings
 
-- **Structure graph construction**
-  - parses CIF structures
-  - builds residue graphs with a distance cutoff
-  - computes node-level confidence values
-  - computes confidence-derived edge weights
-  - stores graph-level coverage and confidence statistics
-  - truncates graphs to stay aligned with truncated ESM embeddings 
-
 - **Shard-aware loading utilities**
   - shard dataset abstraction
   - cache-aware loading
   - custom hybrid batch sampler to reduce shard I/O bottlenecks
   - length-aware candidate batching within an active shard pool 
-- **GAT-based structure encoder**
-  - retrieves graph object from dataloader
-  - passes through a 2-layer GAT2conv network to obtain graph representation
-  - implements confidence weighted attention pooling on graph representation
-- **Sequence + structure fusion via concatenation + MLP**
-  - Sequence and structure representations fused with simple concatenation and passed through a single layer MLP
+
 - **Incorporation of homology prior branch**
   - Homology prior branch is added to the fused Seq+Structure branch along with external reliabiity signals which will be passed to the gate. 
 - **Reliability gate over fused embeddings and homology prior scores**
@@ -76,8 +63,6 @@ The full end-to-end multimodal predictor is **not finished yet**. The Final GO c
 
 ---
 ### Planned
-
-- final GO term classifier
 - end-to-end training and evaluation scripts
 - baseline comparisons and ablations
 - Tests and documentation
@@ -136,7 +121,11 @@ uv run python --version
 ```
 ### 6. DIAMOND Installation
 To run DIAMOND and obtain homology priors, [download the compatible DIAMONDv2.1.24 release](https://github.com/bbuchfink/diamond/releases) for your operating system. 
-NOTE: After download, save Diamond.exe to your project root directory. 
+NOTE: After download, save Diamond.exe to your project root directory and make it executable. 
+
+```bash
+chmod +x path_to_diamond_executable
+```
 ---
 
 ## How to Run
@@ -145,9 +134,9 @@ The final script for inference is still being developed. However, if you wish to
 
 1. preprocessing
 2. ESM embedding extraction
-3. graph shard creation
+3. Homology database construction
 
-That order is not optional. Graph shards depend on the ESM manifest, and the graph builder assumes the alignment produced by the embedding stage.  
+That order is not optional. Homology shard creation depends on the ESM manifest, and the graph builder assumes the alignment produced by the embedding stage.  
 
 ---
 
@@ -159,9 +148,7 @@ uv run python run_preprocessing.py
 
 This script:
 
-* iterates over AF and PDB train/test/val splits
-* downloads missing CIF files
-* filters PDB structures to X-ray-only entries
+* iterates over  PDB train/test/val splits
 * creates cleaned FASTA files for downstream steps 
 
 ---
@@ -197,20 +184,7 @@ Repeat this step for each dataset split you need.
 
 ---
 
-### Step 3: Build graph shards aligned to the ESM shards
 
-```bash
-uv run python create_graph_object.py
-```
-
-This stage:
-
-* reads cleaned FASTA files
-* reads ESM manifests
-* parses CIF structure files
-* builds residue graphs
-* computes structural confidence features
-* saves aligned graph shards for multimodal loading  
 
 ---
 
