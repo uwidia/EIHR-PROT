@@ -3,13 +3,13 @@ Build GO-aspect-specific homology shards from shared DIAMOND hits.
 
 Run once per GO aspect:
 
-    uv python run build_homology_shards.py --go_aspect BP
-    uv python run build_homology_shards.py --go_aspect MF
-    uv python run build_homology_shards.py --go_aspect CC
+    uv run python scripts/build_homology_shards.py --go_aspect BP
+    uv run python scripts/build_homology_shards.py --go_aspect MF
+    uv run python scripts/build_homology_shards.py --go_aspect CC
 
 Force regeneration of existing shard outputs:
 
-    uv python run build_homology_shards.py --go_aspect BP --force
+    uv run python scripts/build_homology_shards.py --go_aspect BP --force
 """
 
 import argparse

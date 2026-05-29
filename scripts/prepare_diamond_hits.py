@@ -3,11 +3,11 @@ Prepare shared DIAMOND sequence-search artifacts.
 
 Run once before building BP/MF/CC homology shards:
 
-    uv python run prepare_diamond_hits.py
+    uv run python scripts/prepare_diamond_hits.py
 
 Force regeneration of existing DIAMOND files:
 
-    uv python run prepare_diamond_hits.py --force
+    uv run python scripts/prepare_diamond_hits.py --force
 """
 
 import argparse
