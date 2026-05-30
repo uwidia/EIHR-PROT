@@ -23,19 +23,33 @@ search_space:
   head_dropout: [0.1, 0.2, 0.3]
   gate_hidden_dim: [16, 32, 64]
   gate_dropout: [0.0, 0.1, 0.2]
-  lambda_hier: [0.01]
+  lambda_hier: [0.0]
   pos_weight_cap: [5.0, 10.0, 20.0]
 
+#BP
+# promising_hparams:
+#   - learning_rate: 0.001
+#     gate_lr_multiplier: 0.2
+#     weight_decay: 0.0001
+#     attn_hidden_dim: 512
+#     attn_dropout: 0.1
+#     head_hidden_dim: 512
+#     head_dropout: 0.3
+#     gate_hidden_dim: 32
+#     gate_dropout: 0.1
+#     lambda_hier: 0.01
+#     pos_weight_cap: 10.0
 
+#MF
 promising_hparams:
-  - learning_rate: 0.001
-    gate_lr_multiplier: 0.2
-    weight_decay: 0.0001
-    attn_hidden_dim: 512
+  - learning_rate: 0.0001
+    gate_lr_multiplier: 0.05
+    weight_decay: 0.001
+    attn_hidden_dim: 128
     attn_dropout: 0.1
     head_hidden_dim: 512
     head_dropout: 0.3
-    gate_hidden_dim: 32
+    gate_hidden_dim: 16
     gate_dropout: 0.1
-    lambda_hier: 0.01
-    pos_weight_cap: 10.0
+    lambda_hier: 0.0
+    pos_weight_cap: 5.0
