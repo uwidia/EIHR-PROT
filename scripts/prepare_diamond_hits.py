@@ -1,15 +1,3 @@
-"""
-Prepare shared DIAMOND sequence-search artifacts.
-
-Run once before building BP/MF/CC homology shards:
-
-    uv run python scripts/prepare_diamond_hits.py
-
-Force regeneration of existing DIAMOND files:
-
-    uv run python scripts/prepare_diamond_hits.py --force
-"""
-
 import argparse
 import logging
 from pathlib import Path
@@ -99,7 +87,7 @@ def main() -> None:
 
     cfg = build_config(args.threads)
 
-    # Keep paths project-rooted so the script is less sensitive to where it is launched from.
+    
     cleaned_dir = PROJECT_ROOT / "data/cleaned_dataset"
     diamond_dir = diamond_directory
 
@@ -109,7 +97,7 @@ def main() -> None:
 
     diamond_dir.mkdir(parents=True, exist_ok=True)
 
-    # Read FASTA files as {protein_id: sequence}; IDs must match manifest labels.
+    
     train_sequences = read_fasta_as_dict(train_dataset)
     val_sequences = read_fasta_as_dict(val_dataset)
     test_sequences = read_fasta_as_dict(test_dataset)

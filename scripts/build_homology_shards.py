@@ -33,7 +33,6 @@ VALID_GO_ASPECTS = {"BP", "MF", "CC"}
 
 
 def file_exists(path: Path) -> bool:
-    """Return True only when the file exists and is not empty."""
     return path.exists() and path.stat().st_size > 0
 
 
@@ -41,8 +40,7 @@ def build_config(threads: int) -> DiamondSearchConfig:
     """
     Build the homology filtering config.
 
-    Keep these settings aligned with prepare_diamond_hits.py because
-    build_aligned_homology_shards re-applies E-value, coverage, and top-k filtering.
+    Build_aligned_homology_shards re-applies E-value, coverage, and top-k filtering.
     """
     return DiamondSearchConfig(
         evalue_max=1e-5,
@@ -56,7 +54,6 @@ def build_config(threads: int) -> DiamondSearchConfig:
 
 
 def require_file(path: Path, message: str) -> None:
-    """Fail early with a clear message when a required input file is missing."""
     if not file_exists(path):
         raise FileNotFoundError(f"{message}: {path}")
 
@@ -76,13 +73,12 @@ def maybe_build_split_shards(
     """Build homology shards for one dataset split unless they already exist."""
     metadata_path = output_dir / "homology_shard_metadata.json"
 
-    # Skip existing shard outputs by default so reruns do not overwrite prior results accidentally.
+  
     if file_exists(metadata_path) and not force:
         logger.info("Skipping existing %s homology shards: %s", split, output_dir)
         return
 
-    # The train split searches against itself, so self-hits must be removed.
-    # Val/test search against train only, so self-hit removal is normally unnecessary.
+    
     build_aligned_homology_shards(
         manifest_path=manifest_path,
         diamond_hits=diamond_hits,
