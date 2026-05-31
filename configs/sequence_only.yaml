@@ -3,11 +3,11 @@ num_trials: 15
 trial_epochs: 6
 top_k_params: 5
 patience: 121
-final_epochs: 120
+final_epochs: 150
 
 
 base_dir_search: runs/models/sequence_only/search
-base_dir_final: runs/models/sequence_only/final/BP
+base_dir_final: runs/models/sequence_only/final/MF
 
 use_wandb: True
 wandb_project: seq_homology_reliability_aware_pfp
@@ -25,24 +25,24 @@ search_space:
   pos_weight_cap: [5.0, 10.0, 20.0]
 
 
-# #BP
-promising_hparams:
-  - learning_rate: 0.001
-    weight_decay: 0.001
-    attn_hidden_dim: 128
-    attn_dropout: 0.1
-    head_hidden_dim: 512
-    head_dropout: 0.3
-    lambda_hier: 0.01
-    pos_weight_cap: 5.0
-
-# #MF
+# # #BP
 # promising_hparams:
-#   - learning_rate: 0.0001
+#   - learning_rate: 0.001
 #     weight_decay: 0.001
-#     attn_hidden_dim: 512
+#     attn_hidden_dim: 128
 #     attn_dropout: 0.1
 #     head_hidden_dim: 512
-#     head_dropout: 0.2
-#     lambda_hier: 0.0
-#     pos_weight_cap: 10.0
+#     head_dropout: 0.3
+#     lambda_hier: 0.01
+#     pos_weight_cap: 5.0
+
+#MF
+promising_hparams:
+  - learning_rate: 0.0001
+    weight_decay: 0.001
+    attn_hidden_dim: 512
+    attn_dropout: 0.1
+    head_hidden_dim: 512
+    head_dropout: 0.2
+    lambda_hier: 0.0
+    pos_weight_cap: 10.0
