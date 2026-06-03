@@ -6,7 +6,7 @@ patience: 1000
 base_dir_search: runs/models/updated_sequence_homology_confidence_gate/search/CC
 
 final_epochs: 150
-base_dir_final: runs/models/updated_sequence_homology_confidence_gate/final/CC
+base_dir_final: runs/models/updated_sequence_homology_confidence_gate/correct_retryyy/CC
 
 use_wandb: True
 wandb_project: seq_homology_reliability_aware_pfp
@@ -59,14 +59,14 @@ search_space:
 
 # #CC
 promising_hparams:
-  - learning_rate: 0.0003
+  - learning_rate: 0.001
     gate_lr_multiplier: 0.1
-    weight_decay: 0.001
-    attn_hidden_dim: 256
+    weight_decay: 0.0001
+    attn_hidden_dim: 128
     attn_dropout: 0.2
     head_hidden_dim: 512
-    head_dropout: 0.2
-    gate_hidden_dim: 64
-    gate_dropout: 0.0
+    head_dropout: 0.1
+    gate_hidden_dim: 16
+    gate_dropout: 0.1
     lambda_hier: 0.001
-    pos_weight_cap: 20.0
+    pos_weight_cap: 5.0

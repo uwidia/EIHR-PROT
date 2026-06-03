@@ -53,3 +53,17 @@ search_space:
 #     gate_dropout: 0.1
 #     lambda_hier: 0.0
 #     pos_weight_cap: 5.0
+
+# CC
+promising_hparams:
+  - learning_rate: 0.0003
+    gate_lr_multiplier: 0.05
+    weight_decay: 0.001
+    attn_hidden_dim: 256
+    attn_dropout: 0.2
+    head_hidden_dim: 512
+    head_dropout: 0.3
+    gate_hidden_dim: 32
+    gate_dropout: 0.0
+    lambda_hier: 0.001
+    pos_weight_cap: 5.0
