@@ -1,5 +1,5 @@
 batch_size: 64
-base_dir_eval: runs/new_main_models/homology_only/eval
+base_dir_eval: runs/homology_only/eval
 
 lambda_hier: 0.001
 pos_weight_cap: 10.0
