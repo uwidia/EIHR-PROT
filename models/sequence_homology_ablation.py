@@ -14,16 +14,13 @@ from models.sequence_homology_common import (
 )
 from reliability_aware.utils.losses import hierarchy_loss, weighted_bce_on_probs
 
-
 logger = logging.getLogger(__name__)
 
 
 def initialize_gate_to_balanced(final_layer: nn.Linear) -> None:
     nn.init.zeros_(final_layer.weight)
     nn.init.zeros_(final_layer.bias)
-    logger.info(
-        "Initialized gate final layer for near 50/50 neural/homology fusion."
-    )
+    logger.info("Initialized gate final layer for near 50/50 neural/homology fusion.")
 
 
 def _compute_neural_probs(seq_branch, head, padded, mask):
@@ -31,67 +28,6 @@ def _compute_neural_probs(seq_branch, head, padded, mask):
     neural_logits = head(seq_repr)
     neural_probs = torch.sigmoid(neural_logits)
     return seq_repr, seq_attn, neural_logits, neural_probs
-
-
-class SequenceHomologyFixedFusionModel(nn.Module):
-    def __init__(
-        self,
-        num_go_terms: int,
-        attn_hidden_dim: int = 256,
-        attn_dropout: float = 0.1,
-        head_hidden_dim: int = 512,
-        head_dropout: float = 0.2,
-    ):
-        super().__init__()
-        self.seq_branch = ESMSequenceBranch(
-            esm_dim=1280,
-            attn_hidden_dim=attn_hidden_dim,
-            attn_dropout=attn_dropout,
-            out_dim=None,
-        )
-        self.head = SequencePredictionHead(
-            input_dim=1280,
-            hidden_dim=head_hidden_dim,
-            num_go_terms=num_go_terms,
-            dropout=head_dropout,
-        )
-
-    def forward(
-        self,
-        padded: torch.Tensor,
-        mask: torch.Tensor,
-        homology_scores: torch.Tensor,
-        graph_batch=None,
-        gate_features=None,
-    ):
-        seq_repr, seq_attn, neural_logits, neural_probs = _compute_neural_probs(
-            self.seq_branch,
-            self.head,
-            padded,
-            mask,
-        )
-        homology_scores = homology_scores.to(
-            device=neural_probs.device,
-            dtype=neural_probs.dtype,
-        )
-        fused_probs = 0.5 * neural_probs + 0.5 * homology_scores
-        gate_weights = torch.full(
-            (neural_probs.shape[0], 2),
-            0.5,
-            device=neural_probs.device,
-            dtype=neural_probs.dtype,
-        )
-
-        return {
-            "probs": fused_probs,
-            "fused_probs": fused_probs,
-            "neural_probs": neural_probs,
-            "neural_logits": neural_logits,
-            "homology_scores": homology_scores,
-            "gate_weights": gate_weights,
-            "seq_repr": seq_repr,
-            "seq_attn": seq_attn,
-        }
 
 
 class SequenceHomologyInternalGateModel(nn.Module):
@@ -291,14 +227,6 @@ def _build_optimizer(model, sample_hparams: dict, *, use_gate_lr: bool = False):
     )
 
 
-def build_sequence_homology_fixed_model(sample_hparams, go_terms, device):
-    model = SequenceHomologyFixedFusionModel(
-        num_go_terms=len(go_terms),
-        **_sequence_homology_model_kwargs(sample_hparams),
-    ).to(device)
-    return model, _build_optimizer(model, sample_hparams)
-
-
 def build_sequence_homology_internal_gate_model(sample_hparams, go_terms, device):
     dropout = float(sample_hparams.get("dropout", 0.2))
     model = SequenceHomologyInternalGateModel(
@@ -458,25 +386,6 @@ def _run_sequence_homology_smoke_test(
     )
 
 
-def run_one_batch_smoke_test_sequence_homology_fixed(
-    model,
-    train_loader,
-    pos_weight,
-    child_parent_pairs,
-    lambda_hier,
-    device,
-):
-    _run_sequence_homology_smoke_test(
-        model=model,
-        train_loader=train_loader,
-        pos_weight=pos_weight,
-        child_parent_pairs=child_parent_pairs,
-        lambda_hier=lambda_hier,
-        device=device,
-        use_gate_features=False,
-    )
-
-
 def run_one_batch_smoke_test_sequence_homology_internal_gate(
     model,
     train_loader,
@@ -520,13 +429,10 @@ def run_one_batch_smoke_test_sequence_homology_confidence_gate(
 __all__ = [
     "SequenceHomologyShardDataset",
     "make_sequence_homology_collate_fn",
-    "SequenceHomologyFixedFusionModel",
     "SequenceHomologyInternalGateModel",
     "SequenceHomologyConfidenceGateModel",
-    "build_sequence_homology_fixed_model",
     "build_sequence_homology_internal_gate_model",
     "build_sequence_homology_confidence_gate_model",
-    "run_one_batch_smoke_test_sequence_homology_fixed",
     "run_one_batch_smoke_test_sequence_homology_internal_gate",
     "run_one_batch_smoke_test_sequence_homology_confidence_gate",
 ]
