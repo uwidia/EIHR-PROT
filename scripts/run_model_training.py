@@ -14,12 +14,9 @@ from pathlib import Path
 
 import yaml
 
-
-
 ACTIVE_ABLATIONS = [
     "sequence_only",
     "homology_only",
-    "sequence_homology_fixed",
     "sequence_homology_internal_gate",
     "sequence_homology_confidence_gate",
 ]
@@ -54,7 +51,9 @@ def main():
     run_type = args.run_type.lower()
 
     if ablation == "homology_only" and run_type != "evaluate_only":
-        raise ValueError("homology_only is evaluation-only; use --run_type evaluate_only.")
+        raise ValueError(
+            "homology_only is evaluation-only; use --run_type evaluate_only."
+        )
     if ablation != "homology_only" and run_type == "evaluate_only":
         raise ValueError(
             "evaluate_only is currently supported only for homology_only. "
@@ -75,10 +74,8 @@ def main():
     from models.homology_only_baseline import run_homology_only_evaluation
     from models.sequence_homology_ablation import (
         build_sequence_homology_confidence_gate_model,
-        build_sequence_homology_fixed_model,
         build_sequence_homology_internal_gate_model,
         run_one_batch_smoke_test_sequence_homology_confidence_gate,
-        run_one_batch_smoke_test_sequence_homology_fixed,
         run_one_batch_smoke_test_sequence_homology_internal_gate,
     )
     from models.sequence_homology_common import (
@@ -125,14 +122,6 @@ def main():
             "filter_invalid_samples": False,
             "smoke_test_fn": run_one_batch_smoke_test_sequence_only,
         },
-        "sequence_homology_fixed": {
-            "build_model_fn": build_sequence_homology_fixed_model,
-            "dataset_cls": SequenceHomologyShardDataset,
-            "dataset_kind": "sequence_homology",
-            "collate_factory": make_sequence_homology_collate_fn,
-            "filter_invalid_samples": False,
-            "smoke_test_fn": run_one_batch_smoke_test_sequence_homology_fixed,
-        },
         "sequence_homology_internal_gate": {
             "build_model_fn": build_sequence_homology_internal_gate_model,
             "dataset_cls": SequenceHomologyShardDataset,
@@ -166,9 +155,11 @@ def main():
             lambda_hier=float(hparams.get("lambda_hier", 0.0)),
             pos_weight_cap=float(hparams.get("pos_weight_cap", 20.0)),
             batch_size=batch_size,
-            out_dir=hparams.get("base_dir_eval", "runs/homology_only"),
+            out_dir=Path(hparams["base_dir_eval"]) / go_aspect,
             use_wandb=hparams.get("use_wandb", False),
-            wandb_project=hparams.get("wandb_project", "seq_homology_reliability_aware_pfp"),
+            wandb_project=hparams.get(
+                "wandb_project", "seq_homology_reliability_aware_pfp"
+            ),
             wandb_entity=hparams.get("wandb_entity"),
             wandb_mode=hparams.get("wandb_mode", "online"),
             wandb_run_name=hparams.get(
@@ -221,11 +212,13 @@ def main():
             build_model_fn=model_specific_params["build_model_fn"],
             smoke_test_fn=model_specific_params["smoke_test_fn"],
             patience=hparams["patience"],
-            base_dir=hparams["base_dir_search"],
+            base_dir=Path(hparams["base_dir_search"]) / go_aspect,
             smoke_test=True,
             top_k_params=hparams["top_k_params"],
             use_wandb=hparams.get("use_wandb", False),
-            wandb_project=hparams.get("wandb_project", "seq_homology_reliability_aware_pfp"),
+            wandb_project=hparams.get(
+                "wandb_project", "seq_homology_reliability_aware_pfp"
+            ),
             wandb_entity=hparams.get("wandb_entity"),
             wandb_mode=hparams.get("wandb_mode", "online"),
             ablation=ablation,
@@ -234,7 +227,7 @@ def main():
 
     elif run_type == "full_training":
         run_model_training(
-            promising_hparams=hparams["promising_hparams"],
+            promising_hparams=hparams["promising_hparams"][go_aspect],
             train_loader=train_loader,
             val_loader=val_loader,
             train_keep_ids_for_aspect=go_data.train_keep_ids,
@@ -247,9 +240,11 @@ def main():
             device=device,
             final_epochs=hparams["final_epochs"],
             patience=hparams["patience"],
-            base_dir=hparams["base_dir_final"],
+            base_dir=Path(hparams["base_dir_final"]) / go_aspect,
             use_wandb=hparams.get("use_wandb", False),
-            wandb_project=hparams.get("wandb_project", "seq_homology_reliability_aware_pfp"),
+            wandb_project=hparams.get(
+                "wandb_project", "seq_homology_reliability_aware_pfp"
+            ),
             wandb_entity=hparams.get("wandb_entity"),
             wandb_mode=hparams.get("wandb_mode", "online"),
             ablation=ablation,
