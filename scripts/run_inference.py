@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run inference for the sequence-only and sequence+homology ablations.
+Run inference for sequence-only, sequence+homology, and homology-only ablations.
 
 This script assumes you have already prepared the test split artifacts with:
 
@@ -61,9 +61,12 @@ PROJECT_ROOT = find_project_root()
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from models.homology_only_baseline import (  # noqa: E402
+    HomologyShardDataset,
+    make_homology_only_collate_fn,
+)
 from models.sequence_homology_ablation import (  # noqa: E402
     build_sequence_homology_confidence_gate_model,
-    build_sequence_homology_fixed_model,
     build_sequence_homology_internal_gate_model,
 )
 from models.sequence_homology_common import (  # noqa: E402
@@ -92,13 +95,13 @@ from reliability_aware.utils.parser import get_protein_info  # noqa: E402
 LOGGER = logging.getLogger("run_inference")
 
 SUPPORTED_ABLATIONS = {
+    "homology_only": {
+        "builder": None,
+        "dataset_kind": "homology",
+    },
     "sequence_only": {
         "builder": build_seq_only_model,
         "dataset_kind": "sequence",
-    },
-    "sequence_homology_fixed": {
-        "builder": build_sequence_homology_fixed_model,
-        "dataset_kind": "sequence_homology",
     },
     "sequence_homology_internal_gate": {
         "builder": build_sequence_homology_internal_gate_model,
@@ -130,9 +133,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--checkpoint",
-        required=True,
+        required=False,
+        default=None,
         type=Path,
-        help="Path to the run-specific best_model.pt file.",
+        help=(
+            "Path to the run-specific best_model.pt file. Required for trained "
+            "neural ablations; not used for homology_only."
+        ),
     )
 
     # Dataset/artifact paths. Defaults match the repo's current layout.
@@ -372,7 +379,7 @@ def build_test_loader(
             label_to_indices=test_label_to_indices,
             num_go_terms=len(go_terms),
         )
-    else:
+    elif dataset_kind == "sequence_homology":
         if test_homology_shard_dir is None:
             raise ValueError("sequence+homology models require --test_homology_shard_dir")
         dataset = SequenceHomologyShardDataset(
@@ -385,6 +392,20 @@ def build_test_loader(
             label_to_indices=test_label_to_indices,
             num_go_terms=len(go_terms),
         )
+    elif dataset_kind == "homology":
+        if test_homology_shard_dir is None:
+            raise ValueError("homology_only requires --test_homology_shard_dir")
+        dataset = HomologyShardDataset(
+            homology_shard_dir=test_homology_shard_dir,
+            manifest_path=test_manifest_path,
+            keep_ids=test_keep_ids,
+        )
+        collate_fn = make_homology_only_collate_fn(
+            label_to_indices=test_label_to_indices,
+            num_go_terms=len(go_terms),
+        )
+    else:
+        raise ValueError(f"Unsupported dataset kind: {dataset_kind}")
 
     if len(dataset) == 0:
         raise RuntimeError(
@@ -406,7 +427,7 @@ def build_test_loader(
 @torch.no_grad()
 def run_prediction_pass(
     *,
-    model: torch.nn.Module,
+    model: torch.nn.Module | None,
     loader: DataLoader,
     go_terms: list[str],
     top_k: int,
@@ -426,25 +447,35 @@ def run_prediction_pass(
         labels = list(batch["labels"])
         global_indices = [int(x) for x in batch["global_indices"].tolist()]
 
-        batch = move_batch_to_device(batch, device)
-        outputs = model_forward_from_batch(model, batch)
+        if model is None:
+            # Homology-only baseline: the collate function already returns the
+            # precomputed homology prior vector as probs. No neural model exists.
+            probs = batch["probs"].detach().cpu().float()
+            targets = batch["targets"].detach().cpu().float()
+            neural_probs = None
+            homology_scores = probs
+            gate_weights = None
+        else:
+            batch = move_batch_to_device(batch, device)
+            outputs = model_forward_from_batch(model, batch)
 
-        probs = outputs["probs"].detach().cpu().float()
-        targets = batch["targets"].detach().cpu().float()
+            probs = outputs["probs"].detach().cpu().float()
+            targets = batch["targets"].detach().cpu().float()
+
+            neural_probs = outputs.get("neural_probs")
+            if neural_probs is not None:
+                neural_probs = neural_probs.detach().cpu().float()
+
+            homology_scores = outputs.get("homology_scores")
+            if homology_scores is not None:
+                homology_scores = homology_scores.detach().cpu().float()
+
+            gate_weights = outputs.get("gate_weights")
+
         all_probs.append(probs)
         all_targets.append(targets)
         labels_all.extend(labels)
         global_indices_all.extend(global_indices)
-
-        neural_probs = outputs.get("neural_probs")
-        if neural_probs is not None:
-            neural_probs = neural_probs.detach().cpu().float()
-
-        homology_scores = outputs.get("homology_scores")
-        if homology_scores is not None:
-            homology_scores = homology_scores.detach().cpu().float()
-
-        gate_weights = outputs.get("gate_weights")
         if gate_weights is not None:
             gate_weights = gate_weights.detach().cpu().float()
             all_gate_weights.append(gate_weights)
@@ -568,7 +599,7 @@ def save_metrics_json(
     metrics: dict[str, float],
     path: Path,
     args: argparse.Namespace,
-    checkpoint: dict[str, Any],
+    checkpoint: dict[str, Any] | None,
     n_proteins: int,
     n_go_terms: int,
 ) -> None:
@@ -578,9 +609,9 @@ def save_metrics_json(
         "n_go_terms": n_go_terms,
         "ablation": args.ablation,
         "go_aspect": args.go_aspect,
-        "checkpoint": str(args.checkpoint),
-        "checkpoint_epoch": checkpoint.get("epoch"),
-        "checkpoint_val_metrics": checkpoint.get("val_metrics"),
+        "checkpoint": str(args.checkpoint) if args.checkpoint is not None else None,
+        "checkpoint_epoch": checkpoint.get("epoch") if checkpoint is not None else None,
+        "checkpoint_val_metrics": checkpoint.get("val_metrics") if checkpoint is not None else None,
         "paths": {
             "test_fasta": str(args.test_fasta),
             "train_fasta": str(args.train_fasta),
@@ -600,7 +631,7 @@ def save_metrics_json(
 def main() -> None:
     args = parse_args()
 
-    args.checkpoint = resolve_path(args.checkpoint)
+    args.checkpoint = resolve_path(args.checkpoint) if args.checkpoint is not None else None
     args.test_fasta = resolve_path(args.test_fasta)
     args.train_fasta = resolve_path(args.train_fasta)
     args.test_esm_shard_dir = resolve_path(args.test_esm_shard_dir)
@@ -614,7 +645,7 @@ def main() -> None:
     else:
         args.go_vocab_path = resolve_path(args.go_vocab_path)
 
-    if args.test_homology_shard_dir is None and SUPPORTED_ABLATIONS[args.ablation]["dataset_kind"] == "sequence_homology":
+    if args.test_homology_shard_dir is None and SUPPORTED_ABLATIONS[args.ablation]["dataset_kind"] in {"sequence_homology", "homology"}:
         args.test_homology_shard_dir = PROJECT_ROOT / "diamond_db" / args.go_aspect / "test_homology_shards"
     elif args.test_homology_shard_dir is not None:
         args.test_homology_shard_dir = resolve_path(args.test_homology_shard_dir)
@@ -623,20 +654,28 @@ def main() -> None:
     setup_logging()
     add_file_logger(args.outdir)
 
-    for path, description in [
-        (args.checkpoint, "checkpoint"),
+    dataset_kind = SUPPORTED_ABLATIONS[args.ablation]["dataset_kind"]
+
+    if dataset_kind != "homology" and args.checkpoint is None:
+        raise ValueError("--checkpoint is required unless --ablation homology_only")
+
+    required_paths = [
         (args.test_fasta, "test FASTA"),
         (args.train_fasta, "train FASTA"),
-        (args.test_esm_shard_dir, "test ESM shard directory"),
         (args.test_manifest_path, "test manifest CSV"),
         (args.go_vocab_path, "GO vocabulary JSON"),
         (args.go_annotation_path, "GO annotation TSV"),
         (args.obo_path, "GO OBO file"),
-    ]:
-        require_path(path, description)
+    ]
+    if args.checkpoint is not None:
+        required_paths.append((args.checkpoint, "checkpoint"))
+    if dataset_kind in {"sequence", "sequence_homology"}:
+        required_paths.append((args.test_esm_shard_dir, "test ESM shard directory"))
+    if dataset_kind in {"sequence_homology", "homology"}:
+        required_paths.append((args.test_homology_shard_dir, "test homology shard directory"))
 
-    if SUPPORTED_ABLATIONS[args.ablation]["dataset_kind"] == "sequence_homology":
-        require_path(args.test_homology_shard_dir, "test homology shard directory")
+    for path, description in required_paths:
+        require_path(path, description)
 
     if args.top_k <= 0:
         raise ValueError("--top_k must be positive")
@@ -675,13 +714,18 @@ def main() -> None:
     LOGGER.info("Training proteins with %s labels: %d", args.go_aspect, len(train_keep_ids))
     LOGGER.info("Test proteins with %s labels: %d", args.go_aspect, len(test_keep_ids))
 
-    model, checkpoint = load_model_from_checkpoint(
-        ablation=args.ablation,
-        checkpoint_path=args.checkpoint,
-        go_terms=go_terms,
-        device=device,
-    )
-    LOGGER.info("Loaded checkpoint epoch=%s", checkpoint.get("epoch"))
+    if dataset_kind == "homology":
+        model = None
+        checkpoint = None
+        LOGGER.info("Running homology-only evaluation; no checkpoint/model is loaded.")
+    else:
+        model, checkpoint = load_model_from_checkpoint(
+            ablation=args.ablation,
+            checkpoint_path=args.checkpoint,
+            go_terms=go_terms,
+            device=device,
+        )
+        LOGGER.info("Loaded checkpoint epoch=%s", checkpoint.get("epoch"))
 
     dataset, loader = build_test_loader(
         ablation=args.ablation,
