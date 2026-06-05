@@ -227,7 +227,7 @@ def main():
 
     elif run_type == "full_training":
         run_model_training(
-            promising_hparams=hparams["promising_hparams"][go_aspect],
+            promising_hparams=[hparams["promising_hparams"][go_aspect]],
             train_loader=train_loader,
             val_loader=val_loader,
             train_keep_ids_for_aspect=go_data.train_keep_ids,

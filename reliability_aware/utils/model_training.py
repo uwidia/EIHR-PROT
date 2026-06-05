@@ -88,7 +88,7 @@ def run_model_training(
             label_to_indices=train_label_to_indices,
             num_go_terms=len(go_terms),
             train_ids=train_keep_ids_for_aspect,
-            cap=hparams["pos_weight_cap"],
+            cap=float(hparams["pos_weight_cap"]),
         )
 
         model, optimizer = build_model_fn(hparams, go_terms, device)
