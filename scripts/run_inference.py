@@ -79,6 +79,7 @@ from models.sequence_only_ablation import (  # noqa: E402
     make_sequence_only_collate_fn,
 )
 from reliability_aware.utils.config import setup_logging  # noqa: E402
+from reliability_aware.utils.cafa_metrics import evaluate_cafa  # noqa: E402
 from reliability_aware.utils.go_term_extraction import (  # noqa: E402
     build_go_annotations_list,
     build_subject_go_index,
@@ -225,6 +226,18 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=101,
         help="Number of thresholds to scan for Fmax and Smin.",
+    )
+    parser.add_argument(
+        "--metric_style",
+        choices=["tensor", "cafa", "both"],
+        default="tensor",
+        help="Metric implementation to run. Default preserves the existing tensor metrics.",
+    )
+    parser.add_argument(
+        "--cafa_ic_source",
+        choices=["train", "train_eval"],
+        default="train_eval",
+        help="Annotations used for CAFA IC calculation.",
     )
     parser.add_argument(
         "--allow_unlabeled_predictions",
@@ -574,6 +587,14 @@ def save_topk_csv(rows: list[dict[str, Any]], path: Path) -> None:
         writer.writerows(rows)
 
 
+def save_cafa_curve(rows: list[dict[str, float]], path: Path) -> None:
+    fieldnames = ["threshold", "precision", "recall", "fscore", "ru", "mi", "s"]
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def print_prediction_preview(rows: list[dict[str, Any]], print_limit: int, top_k: int) -> None:
     if print_limit == 0:
         return
@@ -596,7 +617,7 @@ def print_prediction_preview(rows: list[dict[str, Any]], print_limit: int, top_k
 
 def save_metrics_json(
     *,
-    metrics: dict[str, float],
+    metrics: dict[str, Any],
     path: Path,
     args: argparse.Namespace,
     checkpoint: dict[str, Any] | None,
@@ -609,6 +630,7 @@ def save_metrics_json(
         "n_go_terms": n_go_terms,
         "ablation": args.ablation,
         "go_aspect": args.go_aspect,
+        "metric_style": args.metric_style,
         "checkpoint": str(args.checkpoint) if args.checkpoint is not None else None,
         "checkpoint_epoch": checkpoint.get("epoch") if checkpoint is not None else None,
         "checkpoint_val_metrics": checkpoint.get("val_metrics") if checkpoint is not None else None,
@@ -750,21 +772,61 @@ def main() -> None:
         device=device,
     )
 
-    metrics = compute_metrics(
-        y_true=results["y_true"],
-        y_prob=results["y_prob"],
-        ic=ic,
-        steps=args.metrics_steps,
-    )
+    tensor_metrics = None
+    cafa_metrics = None
+    cafa_curve = None
+    if args.metric_style in {"tensor", "both"}:
+        tensor_metrics = compute_metrics(
+            y_true=results["y_true"],
+            y_prob=results["y_prob"],
+            ic=ic,
+            steps=args.metrics_steps,
+        )
 
+    train_annotations = [
+        {go_terms[index] for index in train_label_to_indices[protein_id]}
+        for protein_id in train_keep_ids
+    ]
+    if args.metric_style in {"cafa", "both"}:
+        cafa_metrics, cafa_curve = evaluate_cafa(
+            y_true=results["y_true"],
+            y_prob=results["y_prob"],
+            go_terms=go_terms,
+            go_aspect=args.go_aspect,
+            obo_path=args.obo_path,
+            train_annotations=train_annotations,
+            ic_source=args.cafa_ic_source,
+        )
+
+    gate_metrics = {}
     if "gate_weights" in results:
         gate_weights = results["gate_weights"]
-        metrics["mean_neural_gate"] = float(gate_weights[:, 0].mean().item())
-        metrics["mean_homology_gate"] = float(gate_weights[:, 1].mean().item())
+        gate_metrics = {
+            "mean_neural_gate": float(gate_weights[:, 0].mean().item()),
+            "mean_homology_gate": float(gate_weights[:, 1].mean().item()),
+        }
+        if tensor_metrics is not None:
+            tensor_metrics.update(gate_metrics)
+
+    if args.metric_style == "tensor":
+        metrics: dict[str, Any] = tensor_metrics
+    else:
+        metrics = {}
+        if tensor_metrics is not None:
+            metrics["tensor"] = tensor_metrics
+        if cafa_metrics is not None:
+            metrics["cafa"] = cafa_metrics
+        if gate_metrics:
+            metrics["gate_weights"] = gate_metrics
 
     topk_csv_path = args.outdir / "topk_predictions.csv"
     metrics_json_path = args.outdir / "metrics.json"
     save_topk_csv(results["topk_rows"], topk_csv_path)
+    if cafa_metrics is not None and cafa_curve is not None:
+        save_cafa_curve(cafa_curve, args.outdir / "cafa_pr_curve.csv")
+        (args.outdir / "cafa_metrics.json").write_text(
+            json.dumps(cafa_metrics, indent=2, sort_keys=True)
+        )
     save_metrics_json(
         metrics=metrics,
         path=metrics_json_path,
@@ -775,18 +837,44 @@ def main() -> None:
     )
 
     print("\n=== Test metrics ===")
-    print(f"Fmax: {metrics['Fmax']:.6f} @ threshold {metrics['Fmax_threshold']:.3f}")
-    print(f"AUPR:  {metrics['AUPR']:.6f}")
-    print(f"Smin raw: {metrics['Smin_raw']:.6f} @ threshold {metrics['Smin_threshold_raw']:.3f}")
-    print(f"Smin normalized: {metrics['Smin_normalized']:.6f} @ threshold {metrics['Smin_threshold_normalized']:.3f}")
-    if "mean_neural_gate" in metrics:
-        print(f"Mean gate: neural={metrics['mean_neural_gate']:.6f}, homology={metrics['mean_homology_gate']:.6f}")
+    if tensor_metrics is not None:
+        print(
+            f"Tensor Fmax: {tensor_metrics['Fmax']:.6f} "
+            f"@ threshold {tensor_metrics['Fmax_threshold']:.3f}"
+        )
+        print(f"Tensor AUPR:  {tensor_metrics['AUPR']:.6f}")
+        print(
+            f"Tensor Smin raw: {tensor_metrics['Smin_raw']:.6f} "
+            f"@ threshold {tensor_metrics['Smin_threshold_raw']:.3f}"
+        )
+        print(
+            f"Tensor Smin normalized: {tensor_metrics['Smin_normalized']:.6f} "
+            f"@ threshold {tensor_metrics['Smin_threshold_normalized']:.3f}"
+        )
+    if cafa_metrics is not None:
+        print(
+            f"CAFA Fmax: {cafa_metrics['Fmax']:.6f} "
+            f"@ threshold {cafa_metrics['Fmax_threshold']:.2f}"
+        )
+        print(f"CAFA AUPR:  {cafa_metrics['AUPR']:.6f}")
+        print(
+            f"CAFA Smin: {cafa_metrics['Smin']:.6f} "
+            f"@ threshold {cafa_metrics['Smin_threshold']:.2f}"
+        )
+    if gate_metrics:
+        print(
+            f"Mean gate: neural={gate_metrics['mean_neural_gate']:.6f}, "
+            f"homology={gate_metrics['mean_homology_gate']:.6f}"
+        )
 
     print("\n=== Top-k prediction preview ===")
     print_prediction_preview(results["topk_rows"], args.print_limit, args.top_k)
 
     print(f"\nSaved metrics to: {metrics_json_path}")
     print(f"Saved full top-{args.top_k} predictions to: {topk_csv_path}")
+    if cafa_metrics is not None:
+        print(f"Saved CAFA metrics to: {args.outdir / 'cafa_metrics.json'}")
+        print(f"Saved CAFA PR curve to: {args.outdir / 'cafa_pr_curve.csv'}")
 
 
 if __name__ == "__main__":
