@@ -30,13 +30,13 @@ retained_xray_ids_out_dir = PROJECT_ROOT / "data/retained_xray_ids"
 # training dataset paths
 train_graph_shard_dir = PROJECT_ROOT / "graph_shards/train"
 train_esm_shard_dir = PROJECT_ROOT / "esm_embeddings/train"
-train_manifest_path = PROJECT_ROOT / "esm_embeddings/train/pdb_train_manifest.csv"
 train_dataset = PROJECT_ROOT / "data/cleaned_dataset/cleaned_pdb_train.fasta"
+train_manifest_path = PROJECT_ROOT / "esm_embeddings/train/train_manifest.csv"
 
 # validation dataset paths
 val_esm_shard_dir = PROJECT_ROOT / "esm_embeddings/val"
-val_manifest_path = PROJECT_ROOT / "esm_embeddings/val/pdb_val_manifest.csv"
 val_dataset = PROJECT_ROOT / "data/cleaned_dataset/cleaned_pdb_val.fasta"
+val_manifest_path = PROJECT_ROOT / "esm_embeddings/val/val_manifest.csv"
 
 
 def setup_logging():
