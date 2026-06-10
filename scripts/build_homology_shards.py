@@ -16,8 +16,15 @@ import argparse
 import logging
 from pathlib import Path
 
-from reliability_aware.utils.config import PROJECT_ROOT, setup_logging, diamond_directory
-from reliability_aware.utils.diamond_homology import DiamondSearchConfig, build_aligned_homology_shards
+from reliability_aware.utils.config import (
+    PROJECT_ROOT,
+    setup_logging,
+    diamond_directory,
+)
+from reliability_aware.utils.diamond_homology import (
+    DiamondSearchConfig,
+    build_aligned_homology_shards,
+)
 from reliability_aware.utils.go_term_extraction import (
     build_go_annotations_list,
     build_subject_go_index,
@@ -73,12 +80,10 @@ def maybe_build_split_shards(
     """Build homology shards for one dataset split unless they already exist."""
     metadata_path = output_dir / "homology_shard_metadata.json"
 
-  
     if file_exists(metadata_path) and not force:
         logger.info("Skipping existing %s homology shards: %s", split, output_dir)
         return
 
-    
     build_aligned_homology_shards(
         manifest_path=manifest_path,
         diamond_hits=diamond_hits,
@@ -173,7 +178,7 @@ def main() -> None:
     # Convert shared sequence hits into GO-aspect-specific prior vectors.
     maybe_build_split_shards(
         split="train",
-        manifest_path=manifest_dir / "train/pdb_train_manifest.csv",
+        manifest_path=manifest_dir / "train/train_manifest.csv",
         diamond_hits=train_hits,
         subject_go_index_path=subject_go_index_path,
         go_vocab_path=go_vocab_path,
@@ -184,7 +189,7 @@ def main() -> None:
     )
     maybe_build_split_shards(
         split="val",
-        manifest_path=manifest_dir / "val/pdb_val_manifest.csv",
+        manifest_path=manifest_dir / "val/val_manifest.csv",
         diamond_hits=val_hits,
         subject_go_index_path=subject_go_index_path,
         go_vocab_path=go_vocab_path,
@@ -195,7 +200,7 @@ def main() -> None:
     )
     maybe_build_split_shards(
         split="test",
-        manifest_path=manifest_dir / "test/pdb_test_manifest.csv",
+        manifest_path=manifest_dir / "test/test_manifest.csv",
         diamond_hits=test_hits,
         subject_go_index_path=subject_go_index_path,
         go_vocab_path=go_vocab_path,

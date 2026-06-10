@@ -2,7 +2,11 @@ import argparse
 import logging
 from pathlib import Path
 
-from reliability_aware.utils.config import PROJECT_ROOT, setup_logging, diamond_directory
+from reliability_aware.utils.config import (
+    PROJECT_ROOT,
+    setup_logging,
+    diamond_directory,
+)
 from reliability_aware.utils.diamond_homology import (
     DiamondSearchConfig,
     build_diamond_database,
@@ -11,7 +15,6 @@ from reliability_aware.utils.diamond_homology import (
     write_fasta_from_ids,
 )
 from reliability_aware.utils.parser import get_protein_info
-
 
 logger = logging.getLogger(__name__)
 
@@ -83,21 +86,37 @@ def main() -> None:
         default=16,
         help="Number of CPU threads to pass to DIAMOND.",
     )
+    parser.add_argument(
+        "--train_dataset",
+        type=Path,
+        default=PROJECT_ROOT / "data/cleaned_dataset" / "cleaned_pdb_train.fasta",
+        help="Path to the training FASTA used to build the DIAMOND database.",
+    )
+    parser.add_argument(
+        "--val_dataset",
+        type=Path,
+        default=PROJECT_ROOT / "data/cleaned_dataset" / "cleaned_pdb_val.fasta",
+        help="Path to the validation FASTA used to generate validation search queries.",
+    )
+    parser.add_argument(
+        "--test_dataset",
+        type=Path,
+        default=PROJECT_ROOT / "data/cleaned_dataset" / "cleaned_pdb_test.fasta",
+        help="Path to the test FASTA used to generate test search queries.",
+    )
     args = parser.parse_args()
 
     cfg = build_config(args.threads)
 
-    
     cleaned_dir = PROJECT_ROOT / "data/cleaned_dataset"
     diamond_dir = diamond_directory
 
-    train_dataset = cleaned_dir / "cleaned_pdb_train.fasta"
-    val_dataset = cleaned_dir / "cleaned_pdb_val.fasta"
-    test_dataset = cleaned_dir / "cleaned_pdb_test.fasta"
+    train_dataset = args.train_dataset
+    val_dataset = args.val_dataset
+    test_dataset = args.test_dataset
 
     diamond_dir.mkdir(parents=True, exist_ok=True)
 
-    
     train_sequences = read_fasta_as_dict(train_dataset)
     val_sequences = read_fasta_as_dict(val_dataset)
     test_sequences = read_fasta_as_dict(test_dataset)

@@ -35,6 +35,7 @@ import torch
 from sklearn.metrics import average_precision_score
 from torch.utils.data import DataLoader
 
+
 def find_project_root() -> Path:
     """Find the repo root whether this file is in scripts/ or run from the repo root."""
     script_path = Path(__file__).resolve()
@@ -48,7 +49,9 @@ def find_project_root() -> Path:
     candidates.append(Path.cwd().resolve())
 
     for candidate in candidates:
-        if (candidate / "models").is_dir() and (candidate / "reliability_aware").is_dir():
+        if (candidate / "models").is_dir() and (
+            candidate / "reliability_aware"
+        ).is_dir():
             return candidate
 
     raise RuntimeError(
@@ -79,7 +82,6 @@ from models.sequence_only_ablation import (  # noqa: E402
     make_sequence_only_collate_fn,
 )
 from reliability_aware.utils.config import setup_logging  # noqa: E402
-from reliability_aware.utils.cafa_metrics import evaluate_cafa  # noqa: E402
 from reliability_aware.utils.go_term_extraction import (  # noqa: E402
     build_go_annotations_list,
     build_subject_go_index,
@@ -91,7 +93,6 @@ from reliability_aware.utils.model_training import (  # noqa: E402
     move_batch_to_device,
 )
 from reliability_aware.utils.parser import get_protein_info  # noqa: E402
-
 
 LOGGER = logging.getLogger("run_inference")
 
@@ -165,7 +166,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--test_manifest_path",
         type=Path,
-        default=PROJECT_ROOT / "esm_embeddings/test/pdb_test_manifest.csv",
+        default=PROJECT_ROOT / "esm_embeddings/test/test_manifest.csv",
         help="Manifest CSV produced by get_embeddings.py for the test split.",
     )
     parser.add_argument(
@@ -226,18 +227,6 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=101,
         help="Number of thresholds to scan for Fmax and Smin.",
-    )
-    parser.add_argument(
-        "--metric_style",
-        choices=["tensor", "cafa", "both"],
-        default="tensor",
-        help="Metric implementation to run. Default preserves the existing tensor metrics.",
-    )
-    parser.add_argument(
-        "--cafa_ic_source",
-        choices=["train", "train_eval"],
-        default="train_eval",
-        help="Annotations used for CAFA IC calculation.",
     )
     parser.add_argument(
         "--allow_unlabeled_predictions",
@@ -379,7 +368,11 @@ def build_test_loader(
 ) -> tuple[Any, DataLoader]:
     """Build a test DataLoader using the existing dataset and collate functions."""
     dataset_kind = SUPPORTED_ABLATIONS[ablation]["dataset_kind"]
-    keep_ids = None if allow_unlabeled_predictions and dataset_kind == "sequence" else test_keep_ids
+    keep_ids = (
+        None
+        if allow_unlabeled_predictions and dataset_kind == "sequence"
+        else test_keep_ids
+    )
 
     if dataset_kind == "sequence":
         dataset = SequenceOnlyESMShardDataset(
@@ -394,7 +387,9 @@ def build_test_loader(
         )
     elif dataset_kind == "sequence_homology":
         if test_homology_shard_dir is None:
-            raise ValueError("sequence+homology models require --test_homology_shard_dir")
+            raise ValueError(
+                "sequence+homology models require --test_homology_shard_dir"
+            )
         dataset = SequenceHomologyShardDataset(
             esm_shard_dir=test_esm_shard_dir,
             homology_shard_dir=test_homology_shard_dir,
@@ -518,9 +513,13 @@ def run_prediction_pass(
                     "homology_gate": homology_gate,
                 }
                 if neural_probs is not None:
-                    row["neural_probability"] = float(neural_probs[row_idx, go_idx].item())
+                    row["neural_probability"] = float(
+                        neural_probs[row_idx, go_idx].item()
+                    )
                 if homology_scores is not None:
-                    row["homology_probability"] = float(homology_scores[row_idx, go_idx].item())
+                    row["homology_probability"] = float(
+                        homology_scores[row_idx, go_idx].item()
+                    )
                 topk_rows.append(row)
 
     y_prob = torch.cat(all_probs, dim=0)
@@ -550,7 +549,9 @@ def compute_metrics(
     smin = smin_score(y_true, y_prob, ic, steps=steps)
 
     try:
-        aupr = float(average_precision_score(y_true.numpy().ravel(), y_prob.numpy().ravel()))
+        aupr = float(
+            average_precision_score(y_true.numpy().ravel(), y_prob.numpy().ravel())
+        )
     except ValueError:
         aupr = math.nan
 
@@ -587,15 +588,9 @@ def save_topk_csv(rows: list[dict[str, Any]], path: Path) -> None:
         writer.writerows(rows)
 
 
-def save_cafa_curve(rows: list[dict[str, float]], path: Path) -> None:
-    fieldnames = ["threshold", "precision", "recall", "fscore", "ru", "mi", "s"]
-    with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def print_prediction_preview(rows: list[dict[str, Any]], print_limit: int, top_k: int) -> None:
+def print_prediction_preview(
+    rows: list[dict[str, Any]], print_limit: int, top_k: int
+) -> None:
     if print_limit == 0:
         return
 
@@ -617,7 +612,7 @@ def print_prediction_preview(rows: list[dict[str, Any]], print_limit: int, top_k
 
 def save_metrics_json(
     *,
-    metrics: dict[str, Any],
+    metrics: dict[str, float],
     path: Path,
     args: argparse.Namespace,
     checkpoint: dict[str, Any] | None,
@@ -630,18 +625,21 @@ def save_metrics_json(
         "n_go_terms": n_go_terms,
         "ablation": args.ablation,
         "go_aspect": args.go_aspect,
-        "metric_style": args.metric_style,
         "checkpoint": str(args.checkpoint) if args.checkpoint is not None else None,
         "checkpoint_epoch": checkpoint.get("epoch") if checkpoint is not None else None,
-        "checkpoint_val_metrics": checkpoint.get("val_metrics") if checkpoint is not None else None,
+        "checkpoint_val_metrics": (
+            checkpoint.get("val_metrics") if checkpoint is not None else None
+        ),
         "paths": {
             "test_fasta": str(args.test_fasta),
             "train_fasta": str(args.train_fasta),
             "test_esm_shard_dir": str(args.test_esm_shard_dir),
             "test_manifest_path": str(args.test_manifest_path),
-            "test_homology_shard_dir": str(args.test_homology_shard_dir)
-            if args.test_homology_shard_dir is not None
-            else None,
+            "test_homology_shard_dir": (
+                str(args.test_homology_shard_dir)
+                if args.test_homology_shard_dir is not None
+                else None
+            ),
             "go_vocab_path": str(args.go_vocab_path),
             "go_annotation_path": str(args.go_annotation_path),
             "obo_path": str(args.obo_path),
@@ -653,7 +651,9 @@ def save_metrics_json(
 def main() -> None:
     args = parse_args()
 
-    args.checkpoint = resolve_path(args.checkpoint) if args.checkpoint is not None else None
+    args.checkpoint = (
+        resolve_path(args.checkpoint) if args.checkpoint is not None else None
+    )
     args.test_fasta = resolve_path(args.test_fasta)
     args.train_fasta = resolve_path(args.train_fasta)
     args.test_esm_shard_dir = resolve_path(args.test_esm_shard_dir)
@@ -663,12 +663,18 @@ def main() -> None:
     args.outdir = resolve_path(args.outdir)
 
     if args.go_vocab_path is None:
-        args.go_vocab_path = PROJECT_ROOT / "diamond_db" / args.go_aspect / "go_vocab.json"
+        args.go_vocab_path = (
+            PROJECT_ROOT / "diamond_db" / args.go_aspect / "go_vocab.json"
+        )
     else:
         args.go_vocab_path = resolve_path(args.go_vocab_path)
 
-    if args.test_homology_shard_dir is None and SUPPORTED_ABLATIONS[args.ablation]["dataset_kind"] in {"sequence_homology", "homology"}:
-        args.test_homology_shard_dir = PROJECT_ROOT / "diamond_db" / args.go_aspect / "test_homology_shards"
+    if args.test_homology_shard_dir is None and SUPPORTED_ABLATIONS[args.ablation][
+        "dataset_kind"
+    ] in {"sequence_homology", "homology"}:
+        args.test_homology_shard_dir = (
+            PROJECT_ROOT / "diamond_db" / args.go_aspect / "test_homology_shards"
+        )
     elif args.test_homology_shard_dir is not None:
         args.test_homology_shard_dir = resolve_path(args.test_homology_shard_dir)
 
@@ -694,7 +700,9 @@ def main() -> None:
     if dataset_kind in {"sequence", "sequence_homology"}:
         required_paths.append((args.test_esm_shard_dir, "test ESM shard directory"))
     if dataset_kind in {"sequence_homology", "homology"}:
-        required_paths.append((args.test_homology_shard_dir, "test homology shard directory"))
+        required_paths.append(
+            (args.test_homology_shard_dir, "test homology shard directory")
+        )
 
     for path, description in required_paths:
         require_path(path, description)
@@ -704,12 +712,19 @@ def main() -> None:
     if args.batch_size <= 0:
         raise ValueError("--batch_size must be positive")
 
-    device = torch.device(args.device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    device = torch.device(
+        args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    )
     LOGGER.info("Using device: %s", device)
 
     go_terms = load_go_vocab(args.go_vocab_path)
     go_term_to_idx = {go: i for i, go in enumerate(go_terms)}
-    LOGGER.info("Loaded %d %s GO terms from %s", len(go_terms), args.go_aspect, args.go_vocab_path)
+    LOGGER.info(
+        "Loaded %d %s GO terms from %s",
+        len(go_terms),
+        args.go_aspect,
+        args.go_vocab_path,
+    )
 
     # Build train IC and test targets using existing GO propagation/indexing utilities.
     train_label_to_indices, train_keep_ids = build_label_indices_for_split(
@@ -733,7 +748,9 @@ def main() -> None:
         train_ids=train_keep_ids,
     )
 
-    LOGGER.info("Training proteins with %s labels: %d", args.go_aspect, len(train_keep_ids))
+    LOGGER.info(
+        "Training proteins with %s labels: %d", args.go_aspect, len(train_keep_ids)
+    )
     LOGGER.info("Test proteins with %s labels: %d", args.go_aspect, len(test_keep_ids))
 
     if dataset_kind == "homology":
@@ -762,7 +779,9 @@ def main() -> None:
         allow_unlabeled_predictions=args.allow_unlabeled_predictions,
         device=device,
     )
-    LOGGER.info("Built test loader with %d proteins and %d batches", len(dataset), len(loader))
+    LOGGER.info(
+        "Built test loader with %d proteins and %d batches", len(dataset), len(loader)
+    )
 
     results = run_prediction_pass(
         model=model,
@@ -772,61 +791,21 @@ def main() -> None:
         device=device,
     )
 
-    tensor_metrics = None
-    cafa_metrics = None
-    cafa_curve = None
-    if args.metric_style in {"tensor", "both"}:
-        tensor_metrics = compute_metrics(
-            y_true=results["y_true"],
-            y_prob=results["y_prob"],
-            ic=ic,
-            steps=args.metrics_steps,
-        )
+    metrics = compute_metrics(
+        y_true=results["y_true"],
+        y_prob=results["y_prob"],
+        ic=ic,
+        steps=args.metrics_steps,
+    )
 
-    train_annotations = [
-        {go_terms[index] for index in train_label_to_indices[protein_id]}
-        for protein_id in train_keep_ids
-    ]
-    if args.metric_style in {"cafa", "both"}:
-        cafa_metrics, cafa_curve = evaluate_cafa(
-            y_true=results["y_true"],
-            y_prob=results["y_prob"],
-            go_terms=go_terms,
-            go_aspect=args.go_aspect,
-            obo_path=args.obo_path,
-            train_annotations=train_annotations,
-            ic_source=args.cafa_ic_source,
-        )
-
-    gate_metrics = {}
     if "gate_weights" in results:
         gate_weights = results["gate_weights"]
-        gate_metrics = {
-            "mean_neural_gate": float(gate_weights[:, 0].mean().item()),
-            "mean_homology_gate": float(gate_weights[:, 1].mean().item()),
-        }
-        if tensor_metrics is not None:
-            tensor_metrics.update(gate_metrics)
-
-    if args.metric_style == "tensor":
-        metrics: dict[str, Any] = tensor_metrics
-    else:
-        metrics = {}
-        if tensor_metrics is not None:
-            metrics["tensor"] = tensor_metrics
-        if cafa_metrics is not None:
-            metrics["cafa"] = cafa_metrics
-        if gate_metrics:
-            metrics["gate_weights"] = gate_metrics
+        metrics["mean_neural_gate"] = float(gate_weights[:, 0].mean().item())
+        metrics["mean_homology_gate"] = float(gate_weights[:, 1].mean().item())
 
     topk_csv_path = args.outdir / "topk_predictions.csv"
     metrics_json_path = args.outdir / "metrics.json"
     save_topk_csv(results["topk_rows"], topk_csv_path)
-    if cafa_metrics is not None and cafa_curve is not None:
-        save_cafa_curve(cafa_curve, args.outdir / "cafa_pr_curve.csv")
-        (args.outdir / "cafa_metrics.json").write_text(
-            json.dumps(cafa_metrics, indent=2, sort_keys=True)
-        )
     save_metrics_json(
         metrics=metrics,
         path=metrics_json_path,
@@ -837,34 +816,17 @@ def main() -> None:
     )
 
     print("\n=== Test metrics ===")
-    if tensor_metrics is not None:
+    print(f"Fmax: {metrics['Fmax']:.6f} @ threshold {metrics['Fmax_threshold']:.3f}")
+    print(f"AUPR:  {metrics['AUPR']:.6f}")
+    print(
+        f"Smin raw: {metrics['Smin_raw']:.6f} @ threshold {metrics['Smin_threshold_raw']:.3f}"
+    )
+    print(
+        f"Smin normalized: {metrics['Smin_normalized']:.6f} @ threshold {metrics['Smin_threshold_normalized']:.3f}"
+    )
+    if "mean_neural_gate" in metrics:
         print(
-            f"Tensor Fmax: {tensor_metrics['Fmax']:.6f} "
-            f"@ threshold {tensor_metrics['Fmax_threshold']:.3f}"
-        )
-        print(f"Tensor AUPR:  {tensor_metrics['AUPR']:.6f}")
-        print(
-            f"Tensor Smin raw: {tensor_metrics['Smin_raw']:.6f} "
-            f"@ threshold {tensor_metrics['Smin_threshold_raw']:.3f}"
-        )
-        print(
-            f"Tensor Smin normalized: {tensor_metrics['Smin_normalized']:.6f} "
-            f"@ threshold {tensor_metrics['Smin_threshold_normalized']:.3f}"
-        )
-    if cafa_metrics is not None:
-        print(
-            f"CAFA Fmax: {cafa_metrics['Fmax']:.6f} "
-            f"@ threshold {cafa_metrics['Fmax_threshold']:.2f}"
-        )
-        print(f"CAFA AUPR:  {cafa_metrics['AUPR']:.6f}")
-        print(
-            f"CAFA Smin: {cafa_metrics['Smin']:.6f} "
-            f"@ threshold {cafa_metrics['Smin_threshold']:.2f}"
-        )
-    if gate_metrics:
-        print(
-            f"Mean gate: neural={gate_metrics['mean_neural_gate']:.6f}, "
-            f"homology={gate_metrics['mean_homology_gate']:.6f}"
+            f"Mean gate: neural={metrics['mean_neural_gate']:.6f}, homology={metrics['mean_homology_gate']:.6f}"
         )
 
     print("\n=== Top-k prediction preview ===")
@@ -872,9 +834,6 @@ def main() -> None:
 
     print(f"\nSaved metrics to: {metrics_json_path}")
     print(f"Saved full top-{args.top_k} predictions to: {topk_csv_path}")
-    if cafa_metrics is not None:
-        print(f"Saved CAFA metrics to: {args.outdir / 'cafa_metrics.json'}")
-        print(f"Saved CAFA PR curve to: {args.outdir / 'cafa_pr_curve.csv'}")
 
 
 if __name__ == "__main__":
