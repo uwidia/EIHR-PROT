@@ -588,6 +588,47 @@ def save_topk_csv(rows: list[dict[str, Any]], path: Path) -> None:
         writer.writerows(rows)
 
 
+def build_per_protein_gate_rows(
+    *,
+    labels: list[str],
+    global_indices: list[int],
+    gate_weights: torch.Tensor,
+) -> list[dict[str, Any]]:
+    """Build one gate-score row for every protein evaluated during inference."""
+    n_proteins = len(labels)
+    if len(global_indices) != n_proteins or gate_weights.shape != (n_proteins, 2):
+        raise ValueError(
+            "Cannot align per-protein gate scores: "
+            f"labels={n_proteins}, global_indices={len(global_indices)}, "
+            f"gate_weights_shape={tuple(gate_weights.shape)}"
+        )
+
+    return [
+        {
+            "protein_id": protein_id,
+            "global_idx": global_idx,
+            "neural_gate": float(weights[0].item()),
+            "homology_gate": float(weights[1].item()),
+        }
+        for protein_id, global_idx, weights in zip(
+            labels, global_indices, gate_weights
+        )
+    ]
+
+
+def save_per_protein_gate_csv(rows: list[dict[str, Any]], path: Path) -> None:
+    fieldnames = [
+        "protein_id",
+        "global_idx",
+        "neural_gate",
+        "homology_gate",
+    ]
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def print_prediction_preview(
     rows: list[dict[str, Any]], print_limit: int, top_k: int
 ) -> None:
@@ -805,7 +846,15 @@ def main() -> None:
 
     topk_csv_path = args.outdir / "topk_predictions.csv"
     metrics_json_path = args.outdir / "metrics.json"
+    gate_scores_csv_path = args.outdir / "per_protein_gate_scores.csv"
     save_topk_csv(results["topk_rows"], topk_csv_path)
+    if "gate_weights" in results:
+        gate_rows = build_per_protein_gate_rows(
+            labels=results["labels"],
+            global_indices=results["global_indices"],
+            gate_weights=results["gate_weights"],
+        )
+        save_per_protein_gate_csv(gate_rows, gate_scores_csv_path)
     save_metrics_json(
         metrics=metrics,
         path=metrics_json_path,
@@ -834,6 +883,8 @@ def main() -> None:
 
     print(f"\nSaved metrics to: {metrics_json_path}")
     print(f"Saved full top-{args.top_k} predictions to: {topk_csv_path}")
+    if "gate_weights" in results:
+        print(f"Saved per-protein gate scores to: {gate_scores_csv_path}")
 
 
 if __name__ == "__main__":
