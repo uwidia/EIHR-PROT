@@ -12,33 +12,18 @@ from reliability_aware.utils.losses import (
     hierarchy_loss,
     weighted_bce_on_probs,
 )
-from reliability_aware.utils.metrics import fmax_score, smin_score
+from reliability_aware.utils.cafa_metrics import evaluate_cafa
 from reliability_aware.utils.shard_handling import HomologyShardDataset
-
-
-def _average_precision_score(y_true: torch.Tensor, y_prob: torch.Tensor) -> float:
-    try:
-        from sklearn.metrics import average_precision_score
-
-        return float(average_precision_score(y_true.numpy().ravel(), y_prob.numpy().ravel()))
-    except ModuleNotFoundError:
-        y_true_flat = y_true.bool().flatten()
-        y_prob_flat = y_prob.float().flatten()
-        order = torch.argsort(y_prob_flat, descending=True)
-        sorted_true = y_true_flat[order].float()
-        total_pos = sorted_true.sum()
-        if total_pos.item() == 0:
-            return 0.0
-        precision = torch.cumsum(sorted_true, dim=0) / (
-            torch.arange(1, sorted_true.numel() + 1, dtype=torch.float32)
-        )
-        return float((precision * sorted_true).sum().item() / total_pos.item())
 
 
 def make_homology_only_collate_fn(label_to_indices, num_go_terms: int):
     def collate(batch: Sequence[dict]) -> dict:
         homology_scores = []
-        targets = torch.zeros(len(batch), num_go_terms, dtype=torch.float32)
+        targets = (
+            torch.zeros(len(batch), num_go_terms, dtype=torch.float32)
+            if label_to_indices is not None
+            else None
+        )
         global_indices = torch.tensor(
             [item["global_idx"] for item in batch],
             dtype=torch.long,
@@ -46,7 +31,7 @@ def make_homology_only_collate_fn(label_to_indices, num_go_terms: int):
         labels = [item["label"] for item in batch]
 
         for i, (item, label) in enumerate(zip(batch, labels)):
-            if label not in label_to_indices:
+            if label_to_indices is not None and label not in label_to_indices:
                 raise KeyError(f"Missing label in label_to_indices: {label}")
 
             scores = item["prior"].float()
@@ -57,9 +42,10 @@ def make_homology_only_collate_fn(label_to_indices, num_go_terms: int):
                 )
             homology_scores.append(scores)
 
-            idxs = label_to_indices[label]
-            if idxs:
-                targets[i, list(idxs)] = 1.0
+            if label_to_indices is not None:
+                idxs = label_to_indices[label]
+                if idxs:
+                    targets[i, list(idxs)] = 1.0
 
         return {
             "probs": torch.stack(homology_scores, dim=0),
@@ -77,7 +63,10 @@ def evaluate_homology_only(
     pos_weight,
     child_parent_pairs,
     lambda_hier,
-    ic,
+    go_terms,
+    go_aspect,
+    obo_path,
+    train_annotations,
     device,
 ):
     total_loss = 0.0
@@ -120,21 +109,20 @@ def evaluate_homology_only(
     y_prob = torch.cat(all_probs, dim=0)
     y_true = torch.cat(all_targets, dim=0)
 
-    fmax = fmax_score(y_true, y_prob)
-    smin = smin_score(y_true, y_prob, ic)
-    aupr = _average_precision_score(y_true, y_prob)
+    cafa_metrics, _ = evaluate_cafa(
+        y_true=y_true,
+        y_prob=y_prob,
+        go_terms=go_terms,
+        go_aspect=go_aspect,
+        obo_path=obo_path,
+        train_annotations=train_annotations,
+    )
 
     return {
         "val_loss": total_loss / max(n_batches, 1),
         "bce_loss": bce_total / max(n_batches, 1),
         "hierarchy_loss": hier_total / max(n_batches, 1),
-        "Fmax": fmax["Fmax"],
-        "Fmax_threshold": fmax["threshold"],
-        "AUPR": aupr,
-        "Smin_raw": smin["raw"]["Smin"],
-        "Smin_threshold_raw": smin["raw"]["threshold"],
-        "Smin_normalized": smin["normalized"]["Smin"],
-        "Smin_threshold_normalized": smin["normalized"]["threshold"],
+        **cafa_metrics,
     }
 
 
@@ -148,7 +136,9 @@ def run_homology_only_evaluation(
     train_keep_ids_for_aspect,
     go_terms,
     child_parent_pairs,
-    ic,
+    go_aspect,
+    obo_path,
+    train_annotations,
     device,
     lambda_hier: float,
     pos_weight_cap: float = 20.0,
@@ -189,7 +179,10 @@ def run_homology_only_evaluation(
         pos_weight=pos_weight,
         child_parent_pairs=child_parent_pairs,
         lambda_hier=lambda_hier,
-        ic=ic,
+        go_terms=go_terms,
+        go_aspect=go_aspect,
+        obo_path=obo_path,
+        train_annotations=train_annotations,
         device=device,
     )
 

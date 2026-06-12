@@ -125,9 +125,8 @@ def evaluate_cafa(
     go_aspect: str,
     obo_path: str | Path,
     train_annotations: Iterable[Iterable[str]],
-    ic_source: str = "train_eval",
 ) -> tuple[dict[str, float | int | str], list[dict[str, float]]]:
-    """Evaluate set-based CAFA Fmax, AUPR, and Smin at thresholds 0.01..1.00."""
+    """Evaluate CAFA Fmax, AUPR, and Smin using training-annotation IC."""
     y_true_np = _as_numpy(y_true)
     y_prob_np = _as_numpy(y_prob).astype(np.float64, copy=False)
 
@@ -142,9 +141,6 @@ def evaluate_cafa(
         raise ValueError(
             f"len(go_terms)={len(go_terms)} does not match C={y_prob_np.shape[1]}"
         )
-    if ic_source not in {"train", "train_eval"}:
-        raise ValueError("ic_source must be either 'train' or 'train_eval'")
-
     aspect = go_aspect.upper()
     if aspect not in ASPECT_NAMESPACES:
         raise ValueError("go_aspect must be one of: BP, MF, CC")
@@ -186,18 +182,8 @@ def evaluate_cafa(
         go_aspect=aspect,
         remove_root=False,
     )
-    ic_annotations = list(train_propagated)
-    if ic_source == "train_eval":
-        ic_annotations.extend(
-            propagate_annotation_sets(
-                raw_true_sets,
-                go_dag=go_dag,
-                go_aspect=aspect,
-                remove_root=False,
-            )
-        )
     ic = compute_deepgoplus_ic(
-        ic_annotations,
+        train_propagated,
         go_dag=go_dag,
         go_aspect=aspect,
     )
@@ -298,6 +284,6 @@ def evaluate_cafa(
         "AUPR": aupr,
         "n_proteins_evaluated": n_evaluated,
         "n_go_terms": len(go_terms),
-        "ic_source": ic_source,
+        "ic_source": "train",
     }
     return metrics, curve

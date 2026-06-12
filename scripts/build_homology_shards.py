@@ -7,6 +7,10 @@ Run once per GO aspect:
     uv run python scripts/build_homology_shards.py --go_aspect MF
     uv run python scripts/build_homology_shards.py --go_aspect CC
 
+Build only the test shards needed for inference:
+
+    uv run python scripts/build_homology_shards.py --go_aspect BP --splits test
+
 Force regeneration of existing shard outputs:
 
     uv run python scripts/build_homology_shards.py --go_aspect BP --force
@@ -37,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 VALID_GO_ASPECTS = {"BP", "MF", "CC"}
+VALID_SPLITS = ("train", "val", "test")
 
 
 def file_exists(path: Path) -> bool:
@@ -97,9 +102,7 @@ def maybe_build_split_shards(
     )
 
 
-def main() -> None:
-    setup_logging()
-
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--go_aspect",
@@ -119,10 +122,26 @@ def main() -> None:
         default=16,
         help="Thread count stored in the shared DIAMOND config.",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--splits",
+        nargs="+",
+        choices=VALID_SPLITS,
+        default=list(VALID_SPLITS),
+        help=(
+            "Dataset splits to build. Defaults to train val test. "
+            "Use '--splits test' when preparing artifacts only for inference."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    setup_logging()
+    args = parse_args(argv)
 
     go_aspect = args.go_aspect.upper()
     cfg = build_config(args.threads)
+    selected_splits = set(args.splits)
 
     cleaned_dir = PROJECT_ROOT / "data/cleaned_dataset"
     heal_dir = PROJECT_ROOT / "data/HEAL_dataset"
@@ -138,16 +157,16 @@ def main() -> None:
     val_hits = diamond_dir / "val_hits.tsv"
     test_hits = diamond_dir / "test_hits.tsv"
 
-    # These files should already exist from prepare_diamond_hits.py.
-    require_file(
-        train_hits, "Missing train DIAMOND hits. Run prepare_diamond_hits.py first"
-    )
-    require_file(
-        val_hits, "Missing validation DIAMOND hits. Run prepare_diamond_hits.py first"
-    )
-    require_file(
-        test_hits, "Missing test DIAMOND hits. Run prepare_diamond_hits.py first"
-    )
+    split_hits = {
+        "train": train_hits,
+        "val": val_hits,
+        "test": test_hits,
+    }
+    for split in args.splits:
+        require_file(
+            split_hits[split],
+            f"Missing {split} DIAMOND hits. Run prepare_diamond_hits.py first",
+        )
 
     aspect_dir.mkdir(parents=True, exist_ok=True)
 
@@ -175,42 +194,46 @@ def main() -> None:
     save_subject_go_index(subject_go_index, subject_go_index_path)
     save_go_vocab(go_terms, go_vocab_path)
 
-    # Convert shared sequence hits into GO-aspect-specific prior vectors.
-    maybe_build_split_shards(
-        split="train",
-        manifest_path=manifest_dir / "train/train_manifest.csv",
-        diamond_hits=train_hits,
-        subject_go_index_path=subject_go_index_path,
-        go_vocab_path=go_vocab_path,
-        output_dir=aspect_dir / "train_homology_shards",
-        cfg=cfg,
-        exclude_self_hits=True,
-        force=args.force,
-    )
-    maybe_build_split_shards(
-        split="val",
-        manifest_path=manifest_dir / "val/val_manifest.csv",
-        diamond_hits=val_hits,
-        subject_go_index_path=subject_go_index_path,
-        go_vocab_path=go_vocab_path,
-        output_dir=aspect_dir / "val_homology_shards",
-        cfg=cfg,
-        exclude_self_hits=False,
-        force=args.force,
-    )
-    maybe_build_split_shards(
-        split="test",
-        manifest_path=manifest_dir / "test/test_manifest.csv",
-        diamond_hits=test_hits,
-        subject_go_index_path=subject_go_index_path,
-        go_vocab_path=go_vocab_path,
-        output_dir=aspect_dir / "test_homology_shards",
-        cfg=cfg,
-        exclude_self_hits=False,
-        force=args.force,
-    )
+    split_specs = {
+        "train": {
+            "manifest_path": manifest_dir / "train/train_manifest.csv",
+            "output_dir": aspect_dir / "train_homology_shards",
+            "exclude_self_hits": True,
+        },
+        "val": {
+            "manifest_path": manifest_dir / "val/val_manifest.csv",
+            "output_dir": aspect_dir / "val_homology_shards",
+            "exclude_self_hits": False,
+        },
+        "test": {
+            "manifest_path": manifest_dir / "test/test_manifest.csv",
+            "output_dir": aspect_dir / "test_homology_shards",
+            "exclude_self_hits": False,
+        },
+    }
 
-    logger.info("Finished building %s homology shards.", go_aspect)
+    # Convert only the selected shared hit files into GO-aspect-specific priors.
+    for split in VALID_SPLITS:
+        if split not in selected_splits:
+            continue
+        split_spec = split_specs[split]
+        maybe_build_split_shards(
+            split=split,
+            manifest_path=split_spec["manifest_path"],
+            diamond_hits=split_hits[split],
+            subject_go_index_path=subject_go_index_path,
+            go_vocab_path=go_vocab_path,
+            output_dir=split_spec["output_dir"],
+            cfg=cfg,
+            exclude_self_hits=split_spec["exclude_self_hits"],
+            force=args.force,
+        )
+
+    logger.info(
+        "Finished building %s homology shards for: %s.",
+        go_aspect,
+        ", ".join(split for split in VALID_SPLITS if split in selected_splits),
+    )
 
 
 if __name__ == "__main__":

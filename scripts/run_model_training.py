@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 
 import yaml
@@ -150,7 +149,9 @@ def main():
             train_keep_ids_for_aspect=go_data.train_keep_ids,
             go_terms=go_data.go_terms,
             child_parent_pairs=go_data.child_parent_pairs,
-            ic=go_data.ic,
+            go_aspect=go_aspect,
+            obo_path=config.obo_path,
+            train_annotations=go_data.train_annotations,
             device=device,
             lambda_hier=float(hparams.get("lambda_hier", 0.0)),
             pos_weight_cap=float(hparams.get("pos_weight_cap", 20.0)),
@@ -201,7 +202,9 @@ def main():
             train_label_to_indices=go_data.train_label_to_indices,
             go_terms=go_data.go_terms,
             child_parent_pairs=go_data.child_parent_pairs,
-            ic=go_data.ic,
+            go_aspect=go_aspect,
+            obo_path=config.obo_path,
+            train_annotations=go_data.train_annotations,
             search_space=hparams["search_space"],
             device=device,
             num_trials=hparams["num_trials"],
@@ -234,7 +237,9 @@ def main():
             train_label_to_indices=go_data.train_label_to_indices,
             go_terms=go_data.go_terms,
             child_parent_pairs=go_data.child_parent_pairs,
-            ic=go_data.ic,
+            go_aspect=go_aspect,
+            obo_path=config.obo_path,
+            train_annotations=go_data.train_annotations,
             build_model_fn=model_specific_params["build_model_fn"],
             fit_function=fit_model,
             device=device,

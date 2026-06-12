@@ -71,7 +71,7 @@ class SequenceOnlyESMShardDataset(ESMShardDataset):
 
 def make_sequence_only_collate_fn(
     global_idx_to_label: Mapping[int, str],
-    label_to_indices: Mapping[str, Sequence[int]],
+    label_to_indices: Mapping[str, Sequence[int]] | None,
     num_go_terms: int,
 ):
     """
@@ -97,16 +97,21 @@ def make_sequence_only_collate_fn(
 
         padded = torch.zeros(len(batch), max_len, dim, dtype=dtype)
         mask = torch.zeros(len(batch), max_len, dtype=torch.bool)
-        targets = torch.zeros(len(batch), num_go_terms, dtype=torch.float32)
+        targets = (
+            torch.zeros(len(batch), num_go_terms, dtype=torch.float32)
+            if label_to_indices is not None
+            else None
+        )
 
         for i, (rep, label) in enumerate(zip(reps, labels)):
             L = rep.shape[0]
             padded[i, :L] = rep
             mask[i, :L] = True
 
-            idxs = label_to_indices.get(label, [])
-            if idxs:
-                targets[i, list(idxs)] = 1.0
+            if label_to_indices is not None:
+                idxs = label_to_indices.get(label, [])
+                if idxs:
+                    targets[i, list(idxs)] = 1.0
 
         graph_batch = None
         homology_scores = None

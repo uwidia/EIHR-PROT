@@ -122,7 +122,7 @@ class SequenceHomologyShardDataset(Dataset):
 
 
 def make_sequence_homology_collate_fn(
-    label_to_indices: Mapping[str, Sequence[int]],
+    label_to_indices: Mapping[str, Sequence[int]] | None,
     num_go_terms: int,
 ):
     """
@@ -144,22 +144,27 @@ def make_sequence_homology_collate_fn(
 
         padded = torch.zeros(len(batch), max_len, dim, dtype=dtype)
         mask = torch.zeros(len(batch), max_len, dtype=torch.bool)
-        targets = torch.zeros(len(batch), num_go_terms, dtype=torch.float32)
+        targets = (
+            torch.zeros(len(batch), num_go_terms, dtype=torch.float32)
+            if label_to_indices is not None
+            else None
+        )
 
         homology_scores = []
         gate_features = []
 
         for i, (item, rep, label) in enumerate(zip(batch, reps, labels)):
-            if label not in label_to_indices:
+            if label_to_indices is not None and label not in label_to_indices:
                 raise KeyError(f"Missing label in label_to_indices: {label}")
 
             L = rep.shape[0]
             padded[i, :L] = rep
             mask[i, :L] = True
 
-            idxs = label_to_indices[label]
-            if idxs:
-                targets[i, list(idxs)] = 1.0
+            if label_to_indices is not None:
+                idxs = label_to_indices[label]
+                if idxs:
+                    targets[i, list(idxs)] = 1.0
 
             scores = item["homology_scores"].float()
             if scores.shape != (num_go_terms,):

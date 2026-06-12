@@ -15,9 +15,6 @@ dependencies = [
     "gemmi>=0.7.5",
     "numpy>=2.4.4",
     "requests>=2.33.1",
-    "torch==2.11.0",
-    "torch-geometric>=2.7.0",
-    "torch-cluster",
     "tqdm>=4.67.3",
     "goatools>=1.6.4",
     "scikit-learn>=1.8.0",
@@ -25,23 +22,36 @@ dependencies = [
     "wandb>=0.27.0",
 ]
 
-[tool.uv.extra-build-dependencies]
-torch-cluster = ["torch"]
+[project.optional-dependencies]
+cpu = ["torch==2.11.0"]
+cu128 = ["torch==2.11.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["reliability_aware"]
 
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.uv]
+conflicts = [
+    [
+        { extra = "cpu" },
+        { extra = "cu128" },
+    ],
+]
+
 [tool.uv.sources]
-torch = { index = "pytorch-cu128" }
-torch-cluster = { index = "pyg-cu128-211" }
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu128", extra = "cu128" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
-explicit = true
-
-[[tool.uv.index]]
-name = "pyg-cu128-211"
-url = "https://data.pyg.org/whl/torch-2.11.0+cu128.html"
-format = "flat"
 explicit = true

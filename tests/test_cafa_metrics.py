@@ -43,13 +43,13 @@ class CafaMetricsTest(unittest.TestCase):
                 go_aspect="BP",
                 obo_path=obo_path,
                 train_annotations=[{"GO:0000002"}],
-                ic_source="train",
             )
 
         self.assertEqual(metrics["n_proteins_evaluated"], 1)
         self.assertAlmostEqual(metrics["Fmax"], 1.0)
         self.assertAlmostEqual(metrics["Fmax_threshold"], 0.01)
         self.assertAlmostEqual(metrics["Smin"], 0.0)
+        self.assertEqual(metrics["ic_source"], "train")
         self.assertEqual(len(curve), 100)
         self.assertEqual(curve[0]["threshold"], 0.01)
         self.assertEqual(curve[-1]["threshold"], 1.0)

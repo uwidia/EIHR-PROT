@@ -23,8 +23,7 @@ from reliability_aware.utils.go_term_extraction import (
     build_go_annotations_list,
     build_child_parent_idx_pairs,
 )
-from sklearn.metrics import average_precision_score
-from reliability_aware.utils.metrics import fmax_score, smin_score
+from reliability_aware.utils.cafa_metrics import evaluate_cafa
 
 from dataclasses import dataclass
 
@@ -35,7 +34,7 @@ class GOAnnotationData:
     go_term_to_idx: dict
     num_go_terms: int
     child_parent_pairs: torch.Tensor
-    ic: torch.Tensor
+    train_annotations: list[set[str]]
     train_label_to_indices: dict
     val_label_to_indices: dict
     train_keep_ids: set
@@ -51,7 +50,9 @@ def run_model_training(
     train_label_to_indices,
     go_terms,
     child_parent_pairs,
-    ic,
+    go_aspect,
+    obo_path,
+    train_annotations,
     build_model_fn,
     fit_function,
     device,
@@ -100,7 +101,10 @@ def run_model_training(
             optimizer=optimizer,
             pos_weight=pos_weight.to(device),
             child_parent_pairs=child_parent_pairs.to(device),
-            ic=ic,
+            go_terms=go_terms,
+            go_aspect=go_aspect,
+            obo_path=obo_path,
+            train_annotations=train_annotations,
             device=device,
             lambda_hier=hparams["lambda_hier"],
             num_epochs=final_epochs,
@@ -189,41 +193,23 @@ def build_go_annotation_data(
     train_keep_ids = {label for label, idxs in train_label_to_indices.items() if idxs}
     val_keep_ids = {label for label, idxs in val_label_to_indices.items() if idxs}
 
-    ic = compute_ic_from_label_indices(
-        label_to_indices=train_label_to_indices,
-        num_go_terms=len(go_terms),
-        train_ids=train_keep_ids,
-    ).to(device)
+    train_annotations = [
+        set(train_label_to_go_terms[label])
+        for label in train_keep_ids
+        if label in train_label_to_go_terms
+    ]
 
     return GOAnnotationData(
         go_terms=go_terms,
         go_term_to_idx=go_term_to_idx,
         num_go_terms=len(go_terms),
         child_parent_pairs=child_parent_pairs,
-        ic=ic,
+        train_annotations=train_annotations,
         train_label_to_indices=train_label_to_indices,
         val_label_to_indices=val_label_to_indices,
         train_keep_ids=train_keep_ids,
         val_keep_ids=val_keep_ids,
     )
-
-
-def compute_ic_from_label_indices(
-    label_to_indices: dict[str, list[int]],
-    num_go_terms: int,
-    train_ids: set[str],
-) -> torch.Tensor:
-    counts = torch.zeros(num_go_terms, dtype=torch.float32)
-    valid_ids = [label for label in train_ids if label in label_to_indices]
-    n = len(valid_ids)
-
-    for label in valid_ids:
-        idxs = label_to_indices[label]
-        if idxs:
-            counts[idxs] += 1.0
-
-    p = (counts + 1.0) / (n + 2.0)
-    return -torch.log(p.clamp_min(1e-12))
 
 
 def save_and_track_best(
@@ -261,7 +247,7 @@ def build_record(
         "metrics": {
             "Fmax": history["val_Fmax"],
             "AUPR": history["val_AUPR"],
-            "Smin_raw": history["val_Smin_raw"],
+            "Smin": history["val_Smin"],
         },
         "hparams": deepcopy(hparams),
     }
@@ -368,7 +354,10 @@ def fit_model(
     optimizer,
     pos_weight,
     child_parent_pairs,
-    ic,
+    go_terms,
+    go_aspect,
+    obo_path,
+    train_annotations,
     device,
     *,
     lambda_hier: float = 0.01,
@@ -445,7 +434,10 @@ def fit_model(
             pos_weight=pos_weight,
             child_parent_pairs=child_parent_pairs,
             lambda_hier=lambda_hier,
-            ic=ic,
+            go_terms=go_terms,
+            go_aspect=go_aspect,
+            obo_path=obo_path,
+            train_annotations=train_annotations,
             device=device,
         )
 
@@ -497,7 +489,7 @@ def fit_model(
             f"val_loss={val_metrics['val_loss']:.4f} | "
             f"Fmax={val_metrics['Fmax']:.4f} | "
             f"AUPR={val_metrics['AUPR']:.4f} | "
-            f"Smin_raw={val_metrics['Smin_raw']:.4f}"
+            f"Smin={val_metrics['Smin']:.4f}"
         )
 
         if "mean_neural_gate" in val_metrics:
@@ -529,7 +521,10 @@ def evaluate_model(
     pos_weight,
     child_parent_pairs,
     lambda_hier,
-    ic,
+    go_terms,
+    go_aspect,
+    obo_path,
+    train_annotations,
     device,
 ):
     model.eval()
@@ -581,21 +576,20 @@ def evaluate_model(
     y_prob = torch.cat(all_probs, dim=0)
     y_true = torch.cat(all_targets, dim=0)
 
-    fmax = fmax_score(y_true, y_prob)
-    smin = smin_score(y_true, y_prob, ic)
-    aupr = average_precision_score(y_true.numpy().ravel(), y_prob.numpy().ravel())
+    cafa_metrics, _ = evaluate_cafa(
+        y_true=y_true,
+        y_prob=y_prob,
+        go_terms=go_terms,
+        go_aspect=go_aspect,
+        obo_path=obo_path,
+        train_annotations=train_annotations,
+    )
 
     metrics = {
         "val_loss": total_loss / max(n_batches, 1),
         "bce_loss": bce_total / max(n_batches, 1),
         "hierarchy_loss": hier_total / max(n_batches, 1),
-        "Fmax": fmax["Fmax"],
-        "Fmax_threshold": fmax["threshold"],
-        "AUPR": float(aupr),
-        "Smin_raw": smin["raw"]["Smin"],
-        "Smin_threshold_raw": smin["raw"]["threshold"],
-        "Smin_normalized": smin["normalized"]["Smin"],
-        "Smin_threshold_normalized": smin["normalized"]["threshold"],
+        **cafa_metrics,
     }
 
     if all_gate_weights:

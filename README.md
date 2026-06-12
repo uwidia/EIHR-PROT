@@ -1,87 +1,33 @@
 # Reliability-Aware Protein Function Prediction
 
-A multimodal protein function (GO term) prediction  project that combines sequence representations, structure-derived graph representations, with homology-information and weights modality contributions via a reliability-aware gate.
+CA-PFP is a multimodal protein function (GO term) predictor that combines sequence representations with homology-information. The model receives explicit homology signals per protein and weights the contribution of sequence and homology branches via a gating mechanism to provide  GO term predictions across all aspects.
+
+While several protein function prediction methods combining sequence representations and homology priors exist, CA-PFP improves performance by directly incorporating measures of homology confidence, such as maximum alignment bit score and query coverage, and number of hits to improve performance across standard CAFA metrics (Fmax, AUPR, and Smin).
+
+CA-PFP also adds an added layer of interpretability by displaying how much each branch contributes to the final prediction for each protein entry.
+
+![Model Architecture](images/Emmanuel's%20First%20Illustration%20(2)-images-0.jpg)
 
 ---
 
-## Overview
-
-This project is built around the simple idea that not all biological evidence is equally trustworthy.
-Sequence embeddings from large protein language models are useful, but they do not explicitly encode structural uncertainty. Structural information can add important signal, but its reliability varies across proteins and even across residues. 
-
-This predictive model accounts for this signal variability by using sequence and structure features along with a homology prior, while explicitly modeling structural confidence during graph construction, pooling, and downstream decision-making. 
-
-It is designed based on the hypothesis that incorporating a reliability-aware gate that down-weights unreliable structural regions based on a structure confidence proxy instead of blindly trusting every residue-level structural feature will lead to more accurate and interpretable GO term predictions. 
-The graph construction code already computes residue confidence proxies, edge reliability weights, and graph-level summary statistics for this purpose.
-
----
-
-## Current Status
-
-NOTE:⚠️ **This repository is still under active development.**
-
-The preprocessing and representation-building stages are already implemented. That includes structure download and cleanup, cleaned FASTA generation, per-residue ESM embedding extraction into shards, manifest creation, graph shard construction aligned to the ESM shards, and sequence-side scalar attention pooling. 
-
-The full end-to-end multimodal predictor is **not finished yet**. The Final GO classifier is still in progress. The current codebase should be read as a research pipeline under construction rather than a finished training framework.
-
----
-
-## Features
-
-### Completed
-
-- **Dataset preprocessing pipeline**
-  - handles AF and PDB train/test/val splits
-  - downloads structure CIF files in parallel
-  - cleans AlphaFold FASTA headers
-  - filters PDB structures to X-ray-derived entries only
-  - regenerates cleaned FASTA files
-  - stores FASTA hashes for reproducibility checks
-
-- **ESM embedding extraction**
-  - uses frozen `esm2_t33_650M_UR50D`
-  - extracts per-residue embeddings
-  - saves embeddings in shard files
-  - creates a manifest with shard ID, local index, global index, label, and truncation metadata
-  - writes `run_metadata.json` for reproducibility
-
-- **Sequence branch**
-  - scalar attention pooling over residue embeddings
-  - pooled sequence representation from variable-length residue embeddings
-
-- **Shard-aware loading utilities**
-  - shard dataset abstraction
-  - cache-aware loading
-  - custom hybrid batch sampler to reduce shard I/O bottlenecks
-  - length-aware candidate batching within an active shard pool 
-
-- **Incorporation of homology prior branch**
-  - Homology prior branch is added to the fused Seq+Structure branch along with external reliabiity signals which will be passed to the gate. 
-- **Reliability gate over fused embeddings and homology prior scores**
-  - Reliability gate produces a scalar weight corresponding to fused embeddings and homology prior scores
-  - Homology probability-like scores  are multiplied by their scalar reliability-weight and fused with weighted probability-like scores from Seq+Struct" 
-
----
-### Planned
-- end-to-end training and evaluation scripts
-- baseline comparisons and ablations
-- Tests and documentation
-
----
 ## Environment
 
 ### Requirements
 
 * **Python 3.11**
-* **CUDA 11.8 / cu118**
 * **uv** for dependency management and reproducible environments
 * **DIAMOND v2.1.24** for building database and performing quick sequence alignments
+* Optional: an NVIDIA driver compatible with the PyTorch CUDA 12.8 build
 
-This project uses uv for environment management and to ensure reproducibility. I recommend you install `uv`, install Python 3.11, sync the locked environment, and run project scripts with `uv run`.
+This project uses uv for environment management. PyTorch is provided through
+mutually exclusive `cpu` and `cu128` extras so the same lockfile supports both
+CPU-only and NVIDIA GPU systems.
 
 ---
 
 ## Installation
+
+To run CA-PFP on your protein sequence dataset or reproduce the model's training steps, perform the following installation steps.
 
 ### 1. Install `uv`
 
@@ -110,15 +56,39 @@ cd Reliability-Aware-PFP
 
 ### 4. Sync the environment from `uv.lock`
 
-```bash
-uv sync
-```
+Choose one PyTorch variant.
 
-### 5. Run everything through `uv`
+CPU-only:
 
 ```bash
-uv run python --version
+uv sync --extra cpu
 ```
+
+NVIDIA GPU using the PyTorch CUDA 12.8 build:
+
+```bash
+uv sync --extra cu128
+```
+
+Do not enable both extras at the same time.
+
+### 5. Verify the installation
+
+For CPU:
+
+```bash
+uv run --extra cpu python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+```
+
+For NVIDIA GPU:
+
+```bash
+uv run --extra cu128 python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+```
+
+Use the same selected extra when running project commands, for example
+`uv run --extra cpu python scripts/get_embeddings.py --help`.
+
 ### 6. DIAMOND Installation
 To run DIAMOND and obtain homology priors, [download the compatible DIAMONDv2.1.24 release](https://github.com/bbuchfink/diamond/releases) for your operating system. 
 NOTE: After download, save Diamond.exe to your project root directory and make it executable. 
@@ -126,115 +96,344 @@ NOTE: After download, save Diamond.exe to your project root directory and make i
 ```bash
 chmod +x path_to_diamond_executable
 ```
----
-
-## How to Run
-
-The final script for inference is still being developed. However, if you wish to reproduce the current runnable pipeline, you can do so by executing the following scripts in this order:
-
-1. preprocessing
-2. ESM embedding extraction
-3. Homology database construction
-
-That order is not optional. Homology shard creation depends on the ESM manifest, and the graph builder assumes the alignment produced by the embedding stage.  
 
 ---
 
-### Step 1: Preprocess structures and FASTA files
+## Getting Started (How to Run CA-PFP on your Protein Sequence Dataset)
 
-```bash
-uv run python run_preprocessing.py
+CA-PFP was designed to predict protein function for single or multiple protein sequences in a fasta file. However, note that the model performs homology search against an already defined database obtained from PDB sequences used in other protein function prediction papers such as [DeepFRI](https://github.com/flatironinstitute/DeepFRI/tree/master/preprocessing/data), [HEAL](https://github.com/ZhonghuiGu/HEAL/tree/main/data), and [MAEF-GO](https://github.com/nebstudio/MAEF-GO/tree/main/data).
+
+To modify the homology database, you will need to re-run the model training step (see: Training and Reproducibility section)
+
+### Download the model checkpoint
+Before running inference, download the confidence-gate checkpoints for all three
+GO aspects [here]().
+
+Ensure model checkpoints are saved to your Downloads folder, then run these commands.
+
+On Windows PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force runs | Out-Null
+tar -xzf "$HOME\Downloads\sequence_homology_confidence_gate.tar.gz" -C runs
+
+Test-Path .\runs\sequence_homology_confidence_gate\final\BP\best_model.pt
+Test-Path .\runs\sequence_homology_confidence_gate\final\MF\best_model.pt
+Test-Path .\runs\sequence_homology_confidence_gate\final\CC\best_model.pt
 ```
 
-This script:
-
-* iterates over  PDB train/test/val splits
-* creates cleaned FASTA files for downstream steps 
-
----
-
-### Step 2: Extract ESM embeddings
-
-Example:
+On Linux:
 
 ```bash
-uv run python get_embeddings.py \
-  --fasta data/cleaned_dataset/af/cleaned_af_train.fasta \
-  --outdir esm_shards/af/train \
-  --valid_hashes hashlist.txt \
-  --manifest_filename af_train_manifest \
-  --model esm2_t33_650M_UR50D \
-  --toks_per_batch 4096 \
-  --truncation_seq_length 1022 \
-  --shard_size 1000 \
-  --use_fp16 \
-  --deterministic \
-  --device cuda
+mkdir -p runs
+tar -xzf ~/Downloads/sequence_homology_confidence_gate.tar.gz -C runs
+
+test -f runs/sequence_homology_confidence_gate/final/BP/best_model.pt
+test -f runs/sequence_homology_confidence_gate/final/MF/best_model.pt
+test -f runs/sequence_homology_confidence_gate/final/CC/best_model.pt
+```
+Alternatively, you can manually copy the model checkpoints to the project root's run folder and extract them with `tar -xzf sequence_homology_confidence_gate.tar.gz`
+
+### Step 1: Extract ESM embeddings
+
+This extracts frozen, pre-trained embeddings from `esm2_t33_650M_UR50D` (650M parameters) from [ESM-2](https://github.com/facebookresearch/ESM).
+
+Sequences longer than 1022 amino acids are automatically truncated. For
+inference, only the test/query embedding shards and manifest are required.
+
+Choose the same PyTorch extra used during installation. Use `cpu` on a
+CPU-only system or `cu128` on a system with a compatible NVIDIA driver.
+
+On Windows PowerShell:
+
+```powershell
+$extra = "cu128" # To run on a cpu instead, change to "cpu"
+
+uv run --extra $extra python scripts/get_embeddings.py `
+  --split test `
+  --fasta_file data/cleaned_dataset/cleaned_pdb_test.fasta `
+  --outdir esm_embeddings/test `
+  --deterministic
 ```
 
-This stage:
+On Linux:
 
-* loads frozen ESM-2
-* extracts per-residue embeddings
-* writes shard files
-* creates a manifest CSV
-* writes run metadata for reproducibility 
+```bash
+EXTRA=cu128 # To run on a cpu instead, change to "cpu"
 
-Repeat this step for each dataset split you need.
+uv run --extra "$EXTRA" python scripts/get_embeddings.py \
+  --split test \
+  --fasta_file data/cleaned_dataset/cleaned_pdb_test.fasta \
+  --outdir esm_embeddings/test \
+  --deterministic
+```
+
+### Step 2: Prepare DIAMOND database and build homology shards
+
+Before this step, ensure you've downloaded a compatible DIAMOND executable and modified it's file permissions. The DIAMOND download process is outlined in the earlier installation step.
+
+The first command builds a DIAMOND database from the training split and generates the shared hit files.
+
+The `--splits test` convert only yourdataset's hits into the homology priors needed for inference.
+
+On Windows PowerShell:
+
+```powershell
+$extra = "cu128" # Change to "cpu" if that is your selected environment
+
+uv run --extra $extra python scripts/prepare_diamond_hits.py
+
+uv run --extra $extra python scripts/build_homology_shards.py --go_aspect BP --splits test
+uv run --extra $extra python scripts/build_homology_shards.py --go_aspect MF --splits test
+uv run --extra $extra python scripts/build_homology_shards.py --go_aspect CC --splits test
+```
+
+On Linux:
+
+```bash
+EXTRA=cu128 # Change to cpu if that is your selected environment
+
+uv run --extra "$EXTRA" python scripts/prepare_diamond_hits.py
+
+uv run --extra "$EXTRA" python scripts/build_homology_shards.py --go_aspect BP --splits test
+uv run --extra "$EXTRA" python scripts/build_homology_shards.py --go_aspect MF --splits test
+uv run --extra "$EXTRA" python scripts/build_homology_shards.py --go_aspect CC --splits test
+```
+
+### Step 3: Make Predictions
+
+Each GO aspect uses a separate checkpoint, vocabulary, homology-shard directory, and output directory.
+
+On Windows PowerShell:
+
+```powershell
+$extra = "cu128" # To run on a cpu instead, change to "cpu"
+
+uv run --extra $extra python scripts/inference/run_inference_seq_hom.py `
+  --mode predict `
+  --go_aspect BP `
+  --checkpoint runs/sequence_homology_confidence_gate/final/BP/best_model.pt `
+  --outdir runs/inference/sequence_homology_confidence_gate/BP
+
+uv run --extra $extra python scripts/inference/run_inference_seq_hom.py `
+  --mode predict `
+  --go_aspect MF `
+  --checkpoint runs/sequence_homology_confidence_gate/final/MF/best_model.pt `
+  --outdir runs/inference/sequence_homology_confidence_gate/MF
+
+uv run --extra $extra python scripts/inference/run_inference_seq_hom.py `
+  --mode predict `
+  --go_aspect CC `
+  --checkpoint runs/sequence_homology_confidence_gate/final/CC/best_model.pt `
+  --outdir runs/inference/sequence_homology_confidence_gate/CC
+```
+
+On Linux:
+
+```bash
+EXTRA=cu128 # To run on a cpu instead, change to "cpu"
+
+uv run --extra "$EXTRA" python scripts/inference/run_inference_seq_hom.py \
+  --mode predict \
+  --go_aspect BP \
+  --checkpoint runs/sequence_homology_confidence_gate/final/BP/best_model.pt \
+  --outdir runs/inference/sequence_homology_confidence_gate/BP
+
+uv run --extra "$EXTRA" python scripts/inference/run_inference_seq_hom.py \
+  --mode predict \
+  --go_aspect MF \
+  --checkpoint runs/sequence_homology_confidence_gate/final/MF/best_model.pt \
+  --outdir runs/inference/sequence_homology_confidence_gate/MF
+
+uv run --extra "$EXTRA" python scripts/inference/run_inference_seq_hom.py \
+  --mode predict \
+  --go_aspect CC \
+  --checkpoint runs/sequence_homology_confidence_gate/final/CC/best_model.pt \
+  --outdir runs/inference/sequence_homology_confidence_gate/CC
+```
+
+Prediction mode does not load an annotation TSV. It uses `go-basic.obo` only
+to add the GO name, aspect, and definition to each prediction. The terminal
+output is displayed as:
+
+```text
+Rank | GO ID | GO name | Aspect | Probability Score | Definition
+```
+
+`topk_predictions.csv` contains the same GO metadata together with the protein
+ID, global index, branch probabilities, and gate weights. Each output directory
+also contains `per_protein_gate_scores.csv`, `prediction_metadata.json`, and
+`inference.log`.
 
 ---
 
+## Training and Reproducibility
 
+For researchers, you can use the checked-in dataset splits and configuration files to rebuild the representations, repeat hyperparameter search, train the reported models, and evaluate the resulting checkpoints.
+
+### 1. Rebuild all input artifacts
+
+To retraining CA-PFP, extract embeddings for all three splits. Repeat the Step 1 (Extract ESM Embeddings) embedding command with the following split, FASTA, and output combinations:
+
+```text
+train  data/cleaned_dataset/cleaned_pdb_train.fasta  esm_embeddings/train
+val    data/cleaned_dataset/cleaned_pdb_val.fasta    esm_embeddings/val
+test   data/cleaned_dataset/cleaned_pdb_test.fasta   esm_embeddings/test
+```
+
+Then run `build_homology_shards.py` without `--splits test`. This builds train, validation, and test homology shards for subsequent prediction and evaluation:
+
+On Windows PowerShell:
+
+```powershell
+$extra = "cu128" # To run on a cpu instead, change to "cpu"
+
+foreach ($aspect in @("BP", "MF", "CC")) {
+  uv run --extra $extra python scripts/build_homology_shards.py `
+    --go_aspect $aspect
+}
+```
+
+On Linux:
+
+```bash
+EXTRA=cu128 # To run on a cpu instead, change to "cpu"
+
+for aspect in BP MF CC; do
+  uv run --extra "$EXTRA" python scripts/build_homology_shards.py \
+    --go_aspect "$aspect"
+done
+```
+
+This produces:
+
+```text
+esm_embeddings/{train,val,test}/
+diamond_db/{BP,MF,CC}/
+```
+
+The GO vocabulary is built from training annotations only. Training homology priors exclude self-hits, while validation and test priors search only against the training database.
+
+### 2. Choose a model configuration
+
+| Model | Ablation argument | Configuration |
+| --- | --- | --- |
+| CA-PFP confidence gate | `sequence_homology_confidence_gate` | `configs/sequence_homology_confidence_gate.yaml` |
+| Internal learned gate | `sequence_homology_internal_gate` | `configs/sequence_homology_internal_gate.yaml` |
+| Sequence-only baseline | `sequence_only` | `configs/sequence_only.yaml` |
+| Homology-only baseline | `homology_only` | `configs/homology_only.yaml` |
+
+The YAML files (in the **configs** directory) contain the search spaces, selected hyperparameters, epoch
+limits, patience values, output directories, and W&B settings used by the training entry point.
+
+### 3. Repeat randomized hyperparameter search
+
+The following example repeats the confidence-gate search for BP, MF, and CC.
+
+On Windows PowerShell:
+
+```powershell
+$extra = "cu128" # To run on a cpu instead, change to "cpu"
+
+foreach ($aspect in @("BP", "MF", "CC")) {
+  uv run --extra $extra python scripts/run_model_training.py `
+    --ablation sequence_homology_confidence_gate `
+    --go_aspect $aspect `
+    --hparams configs/sequence_homology_confidence_gate.yaml `
+    --run_type randomized_search
+}
+```
+
+On Linux:
+
+```bash
+EXTRA=cu128 # To run on a cpu instead, change to "cpu"
+
+for aspect in BP MF CC; do
+  uv run --extra "$EXTRA" python scripts/run_model_training.py \
+    --ablation sequence_homology_confidence_gate \
+    --go_aspect "$aspect" \
+    --hparams configs/sequence_homology_confidence_gate.yaml \
+    --run_type randomized_search
+done
+```
+
+To search another trainable model, replace both `--ablation` and `--hparams` with the corresponding pair from the table above. Search results are written under the config's `base_dir_search` directory.
+
+### 4. Train the selected configuration
+
+`full_training` uses the aspect-specific `promising_hparams` stored in the selected YAML file.
+
+On Windows PowerShell:
+
+```powershell
+$extra = "cu128" # To run on a cpu instead, change to "cpu"
+
+foreach ($aspect in @("BP", "MF", "CC")) {
+  uv run --extra $extra python scripts/run_model_training.py `
+    --ablation sequence_homology_confidence_gate `
+    --go_aspect $aspect `
+    --hparams configs/sequence_homology_confidence_gate.yaml `
+    --run_type full_training
+}
+```
+
+On Linux:
+
+```bash
+EXTRA=cu128 # To run on a cpu instead, change to "cpu"
+
+for aspect in BP MF CC; do
+  uv run --extra "$EXTRA" python scripts/run_model_training.py \
+    --ablation sequence_homology_confidence_gate \
+    --go_aspect "$aspect" \
+    --hparams configs/sequence_homology_confidence_gate.yaml \
+    --run_type full_training
+done
+```
+
+The confidence-gate checkpoints produced by retraining are saved as:
+
+```text
+runs/sequence_homology_confidence_gate/final/BP/run_000/best_model.pt
+runs/sequence_homology_confidence_gate/final/MF/run_000/best_model.pt
+runs/sequence_homology_confidence_gate/final/CC/run_000/best_model.pt
+```
+
+Use these `run_000/best_model.pt` paths with the inference commands from Step 3. The downloadable archive may use the shorter flattened checkpoint layout documented earlier.
+
+### 5. Evaluate the homology-only baseline
+
+The homology-only baseline has no trainable checkpoint and uses `evaluate_only`.
+
+On Windows PowerShell:
+
+```powershell
+$extra = "cu128" # To run on a cpu instead, change to "cpu"
+
+foreach ($aspect in @("BP", "MF", "CC")) {
+  uv run --extra $extra python scripts/run_model_training.py `
+    --ablation homology_only `
+    --go_aspect $aspect `
+    --hparams configs/homology_only.yaml `
+    --run_type evaluate_only
+}
+```
+
+On Linux:
+
+```bash
+EXTRA=cu128 # To run on a cpu instead, change to "cpu"
+
+for aspect in BP MF CC; do
+  uv run --extra "$EXTRA" python scripts/run_model_training.py \
+    --ablation homology_only \
+    --go_aspect "$aspect" \
+    --hparams configs/homology_only.yaml \
+    --run_type evaluate_only
+done
+```
+
+For strict comparisons, keep the dataset files, `uv.lock`, GO OBO file, annotation TSV, DIAMOND version, random seed, and YAML configuration unchanged. The embedding stage writes `run_metadata.json`, and training writes checkpoints and run metadata beneath `runs/`.
 
 ---
-
-## Model Design
-
-### Sequence branch
-
-The sequence branch takes per-residue ESM embeddings and produces a pooled protein-level representation using scalar attention pooling. This is already implemented as `ScalarAttentionPooling` and `ESMSequenceBranch`. 
-
-### Structure branch
-
-The structure branch is designed around residue-level protein graphs. Graph nodes correspond to residues, while edges reflect structural proximity. The graph-building utilities already compute residue confidence and edge reliability information, but the full GAT encoder is still being finalized.  
-
-### Reliability-aware prediction
-
-The final intended model will fuse sequence and structure representations, combine them with homology evidence, and use a reliability gate before final GO prediction. That full stage is planned, but not yet fully implemented in the current repo.
-
----
-
-## Current Outputs
-
-Depending on the stage you run, the repository currently produces:
-
-* cleaned FASTA files
-* downloaded CIF files
-* ESM shard files
-* manifest CSV files
-* graph shard files
-* graph shard metadata
-* run metadata JSON files  
-
----
-## Tech Stack
-
-* Python 3.11
-* uv
-* PyTorch
-* ESM-2
-* PyTorch Geometric
-* NumPy
-* Gemmi
-* Parasail
-* Biopython
-* Requests
-* tqdm
-* CSV/JSON-based manifest and metadata tracking   
----
-
-## Notes
-
-This is a research project in progress. My current emphasis is on building a reliable data and representation pipeline first, then layering the full multimodal predictor on top of it.
-
-
