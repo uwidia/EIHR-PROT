@@ -2,13 +2,13 @@ batch_size: 16
 num_trials: 15
 trial_epochs: 6
 top_k_params: 5
-patience: 1000
+patience: 50
 final_epochs: 120
 
 base_dir_search: runs/sequence_homology_internal_gate/search
 base_dir_final: runs/sequence_homology_internal_gate/final
 
-use_wandb: True
+use_wandb: False
 wandb_project: seq_homology_reliability_aware_pfp
 wandb_entity:
 wandb_mode: offline
