@@ -107,7 +107,7 @@ To modify the homology database, you will need to re-run the model training step
 
 ### Download the model checkpoint
 Before running inference, download the confidence-gate checkpoints for all three
-GO aspects [here]().
+GO aspects [here](https://zenodo.org/records/20661853?token=eyJhbGciOiJIUzUxMiJ9.eyJpZCI6ImJhZTdmYWMyLWUyMjEtNGRkYi1hZmIyLTZiOWY4ZWNkZmRiZiIsImRhdGEiOnt9LCJyYW5kb20iOiJhZWU5MWY0ZjZlNTcyNDQ5M2Y3MmIxZWQ5MTc1NjBkYyJ9.tfDdXzsfDpw8eMGG6ERVaznDp4ixj7FSYX_-ac1lSKLg75yecloqhH9muImJp7F1f-bbGX-yMukYrxO2dNxBNg).
 
 Ensure model checkpoints are saved to your Downloads folder, then run these commands.
 
