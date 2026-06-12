@@ -1,4 +1,4 @@
-# Reliability-Aware Protein Function Prediction
+# Gated, Confidence-Aware Protein Function Predictor
 
 CA-PFP is a multimodal protein function (GO term) predictor that combines sequence representations with homology-information. The model receives explicit homology signals per protein and weights the contribution of sequence and homology branches via a gating mechanism to provide  GO term predictions across all aspects.
 
