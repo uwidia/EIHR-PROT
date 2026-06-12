@@ -1,0 +1,39 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+
+# Generated model artifacts and data
+esm_embeddings/
+esm_shards/
+graph_shards/
+diamond_db/
+runs/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Logs and local tooling
+*.log
+.coverage
+htmlcov/
+.idea/
+.vscode/
+
+# OS metadata
+.DS_Store
+Thumbs.db
