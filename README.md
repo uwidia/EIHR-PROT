@@ -21,7 +21,7 @@ CA-PFP also adds an added layer of interpretability by displaying how much each 
 
 This project uses uv for environment management. PyTorch is provided through
 mutually exclusive `cpu` and `cu128` extras so the same lockfile supports both
-CPU-only and NVIDIA GPU systems.
+CPU-only and NVIDIA GPU systems. However, we strongly recommend that you use the cu128 extra for optimal performance.
 
 ---
 
