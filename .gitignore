@@ -19,6 +19,7 @@ dist/
 # Generated model artifacts and data
 esm_embeddings/
 diamond_db/
+runs/
 checkpoints/
 *.pt
 *.pth
