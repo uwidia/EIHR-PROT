@@ -1,10 +1,12 @@
-# Gated, Confidence-Aware Protein Function Predictor
+# EIHR-PROT (Explicitly Incorporated Homology Reliability Signals for Protein Function Prediction)
 
-CA-PFP is a multimodal protein function (GO term) predictor that combines sequence representations with homology-information. The model receives explicit homology signals per protein and weights the contribution of sequence and homology branches via a gating mechanism to provide  GO term predictions across all aspects.
+EIHR-PROT is a multimodal protein function (GO term) predictor that combines sequence representations with homology-information. The model receives explicit homology signals per protein and weights the contribution of sequence and homology branches via a gating mechanism to provide  GO term predictions across all aspects.
 
-While several protein function prediction methods combining sequence representations and homology priors exist, CA-PFP improves performance by directly incorporating measures of homology confidence, such as maximum alignment bit score and query coverage, and number of hits to improve performance across standard CAFA metrics (Fmax, AUPR, and Smin).
+While several protein function prediction methods combining sequence representations and homology priors exist, EIHR-PROT improves performance by directly incorporating measures of homology confidence, such as maximum alignment bit score and query coverage, and number of hits to improve performance across standard CAFA metrics (Fmax, AUPR, and Smin).
 
-CA-PFP also adds an added layer of interpretability by displaying how much each branch contributes to the final prediction for each protein entry.
+EIHR-PROT also adds an added layer of interpretability by displaying how much each branch contributes to the final prediction for each protein entry.
+
+The web version of this model is available [here](https://protein-function-predictor-ten.vercel.app/)
 
 ![Model Architecture](images/Emmanuel's%20First%20Illustration%20(2)-images-0.jpg)
 
@@ -27,7 +29,7 @@ CPU-only and NVIDIA GPU systems. However, we strongly recommend that you use the
 
 ## Installation
 
-To run CA-PFP on your protein sequence dataset or reproduce the model's training steps, perform the following installation steps.
+To run EIHR-PROT on your protein sequence dataset or reproduce the model's training steps, perform the following installation steps.
 
 ### 1. Install `uv`
 
@@ -99,9 +101,9 @@ chmod +x path_to_diamond_executable
 
 ---
 
-## Getting Started (How to Run CA-PFP on your Protein Sequence Dataset)
+## Getting Started (How to Run EIHR-PROT on your Protein Sequence Dataset)
 
-CA-PFP was designed to predict protein function for single or multiple protein sequences in a fasta file. However, note that the model performs homology search against an already defined database obtained from PDB sequences used in other protein function prediction papers such as [DeepFRI](https://github.com/flatironinstitute/DeepFRI/tree/master/preprocessing/data), [HEAL](https://github.com/ZhonghuiGu/HEAL/tree/main/data), and [MAEF-GO](https://github.com/nebstudio/MAEF-GO/tree/main/data).
+EIHR-PROT was designed to predict protein function for single or multiple protein sequences in a fasta file. However, note that the model performs homology search against an already defined database obtained from PDB sequences used in other protein function prediction papers such as [DeepFRI](https://github.com/flatironinstitute/DeepFRI/tree/master/preprocessing/data), [HEAL](https://github.com/ZhonghuiGu/HEAL/tree/main/data), and [MAEF-GO](https://github.com/nebstudio/MAEF-GO/tree/main/data).
 
 To modify the homology database, you will need to re-run the model training step (see: Training and Reproducibility section)
 
@@ -273,7 +275,7 @@ For researchers, you can use the checked-in dataset splits and configuration fil
 
 ### 1. Rebuild all input artifacts
 
-To retraining CA-PFP, extract embeddings for all three splits. Repeat the Step 1 (Extract ESM Embeddings) embedding command with the following split, FASTA, and output combinations:
+To retraining EIHR-PROT, extract embeddings for all three splits. Repeat the Step 1 (Extract ESM Embeddings) embedding command with the following split, FASTA, and output combinations:
 
 ```text
 train  data/cleaned_dataset/cleaned_pdb_train.fasta  esm_embeddings/train
@@ -318,7 +320,7 @@ The GO vocabulary is built from training annotations only. Training homology pri
 
 | Model | Ablation argument | Configuration |
 | --- | --- | --- |
-| CA-PFP confidence gate | `sequence_homology_confidence_gate` | `configs/sequence_homology_confidence_gate.yaml` |
+| EIHR-PROT confidence gate | `sequence_homology_confidence_gate` | `configs/sequence_homology_confidence_gate.yaml` |
 | Internal learned gate | `sequence_homology_internal_gate` | `configs/sequence_homology_internal_gate.yaml` |
 | Sequence-only baseline | `sequence_only` | `configs/sequence_only.yaml` |
 | Homology-only baseline | `homology_only` | `configs/homology_only.yaml` |
