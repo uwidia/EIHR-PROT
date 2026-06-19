@@ -1,17 +1,14 @@
 from pathlib import Path
 import logging
 
+from reliability_aware.utils.diamond_executable import (
+    resolve_diamond_executable,
+)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 diamond_directory = PROJECT_ROOT / "diamond_db"
-diamond_executable_candidates = [
-    PROJECT_ROOT / "diamond.exe",
-    PROJECT_ROOT / "diamond",
-]
-diamond_executable_path = next(
-    (path for path in diamond_executable_candidates if path.exists()),
-    diamond_executable_candidates[-1],
-)
+diamond_executable_path = resolve_diamond_executable()
 
 go_annotation_path = PROJECT_ROOT / "data/HEAL_dataset/nrPDB-GO_2019.06.18_annot.tsv"
 obo_path = PROJECT_ROOT / "data/HEAL_dataset/go-basic.obo"

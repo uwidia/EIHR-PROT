@@ -5,13 +5,22 @@ import logging
 import math
 import subprocess
 from collections import defaultdict
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Mapping, Sequence
-from reliability_aware.utils.config import PROJECT_ROOT, diamond_executable_path
+from reliability_aware.utils.config import PROJECT_ROOT
+from reliability_aware.utils.diamond_executable import (
+    diamond_resolution_error,
+    resolve_diamond_executable,
+)
 import torch
 
 logger = logging.getLogger(__name__)
+
+
+def _default_diamond_executable() -> str:
+    resolved = resolve_diamond_executable()
+    return str(resolved) if resolved is not None else "diamond"
 
 MANIFEST_REQUIRED_COLUMNS = {
     "shard_number",
@@ -37,7 +46,7 @@ DIAMOND_OUTFMT_FIELDS = [
 
 @dataclass(frozen=True)
 class DiamondSearchConfig:
-    diamond_exe: str = str(diamond_executable_path)
+    diamond_exe: str = field(default_factory=_default_diamond_executable)
     evalue_max: float = 1e-5
     min_query_coverage: float = 0.30
     max_target_seqs: int = 50
@@ -164,8 +173,12 @@ def build_diamond_database(
     db_prefix.parent.mkdir(parents=True, exist_ok=True)
     
 
+    diamond_executable = resolve_diamond_executable(explicit=config.diamond_exe)
+    if diamond_executable is None:
+        raise FileNotFoundError(diamond_resolution_error())
+
     cmd = [
-        str(diamond_executable_path),
+        str(diamond_executable),
         "makedb",
         "--in",
         str(training_fasta_path),
