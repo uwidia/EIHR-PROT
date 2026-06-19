@@ -52,6 +52,9 @@ class ESMSequenceBranch(nn.Module):
         self.proj = None if out_dim is None else nn.Linear(esm_dim, out_dim)
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor):
+        parameter_dtype = next(self.parameters()).dtype
+        if x.dtype != parameter_dtype:
+            x = x.to(dtype=parameter_dtype)
         pooled, attn = self.pool(x, mask)
         if self.proj is not None:
             pooled = self.proj(pooled)
