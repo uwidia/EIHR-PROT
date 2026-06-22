@@ -21,9 +21,19 @@ esm_embeddings/
 diamond_db/
 runs/
 checkpoints/
+web_jobs/
+web/runtime_artifact_manifest.json
+*.dmnd
 *.pt
 *.pth
 *.ckpt
+.env
+.env.*
+*.envC
+.env.local
+.env.*.local
+node_modules
+.vercel
 
 # Logs and local tooling
 *.log
