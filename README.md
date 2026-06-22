@@ -52,7 +52,7 @@ uv python install 3.11
 ### 3. Clone the repository
 
 ```bash
-git clone https://github.com/uwidia/Reliability-Aware-PFP.git
+git clone https://github.com/uwidia/EIHR-PROT.git
 cd Reliability-Aware-PFP
 ```
 
