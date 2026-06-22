@@ -49,7 +49,7 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 uv python install 3.11
 ```
 
-### 3. Clone the repository
+### 3. Clone the git repository
 
 ```bash
 git clone https://github.com/uwidia/EIHR-PROT.git
