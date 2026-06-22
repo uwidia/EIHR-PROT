@@ -53,7 +53,7 @@ uv python install 3.11
 
 ```bash
 git clone https://github.com/uwidia/EIHR-PROT.git
-cd Reliability-Aware-PFP
+cd EIHR-PROT
 ```
 
 ### 4. Sync the environment from `uv.lock`
