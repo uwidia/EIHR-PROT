@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 ABLATIONS = [
@@ -18,6 +17,8 @@ ABLATIONS = [
     "sequence_homology_internal_gate",
     "sequence_homology_confidence_gate",
     "homology_only",
+    "diamond_score",
+    "naive",
 ]
 GO_ASPECTS = ["BP", "MF", "CC"]
 TEST_FASTAS = [
@@ -33,12 +34,16 @@ ABLATION_TO_MODEL = {
     "sequence_homology_internal_gate": "internal_gate",
     "sequence_only": "sequence_only",
     "homology_only": "homology_only",
+    "diamond_score": "diamond_score",
+    "naive": "naive",
 }
 ABLATION_TO_SCRIPT = {
     "sequence_only": "scripts/inference/run_inference_seq_only.py",
     "sequence_homology_internal_gate": "scripts/inference/run_inference_seq_hom.py",
     "sequence_homology_confidence_gate": "scripts/inference/run_inference_seq_hom.py",
     "homology_only": "scripts/inference/run_inference_hom_only.py",
+    "diamond_score": "scripts/inference/run_inference_diamond_score.py",
+    "naive": "scripts/inference/run_inference_naive.py",
 }
 
 
@@ -97,7 +102,7 @@ def build_runs() -> list[InferenceRun]:
         model = ABLATION_TO_MODEL[ablation]
         for go_aspect in GO_ASPECTS:
             checkpoint = None
-            if ablation != "homology_only":
+            if ablation not in {"homology_only", "diamond_score", "naive"}:
                 checkpoint = (
                     PROJECT_ROOT
                     / "runs"
@@ -160,17 +165,16 @@ def print_summary(summary: RunSummary, *, dry_run: bool, stopped_early: bool) ->
     print("\n=== Batch inference summary ===")
     print(f"Commands planned: {summary.planned}")
     print(f"Commands executed: {summary.executed}")
-    print(
-        "Skipped (missing checkpoints): "
-        f"{summary.skipped_missing_checkpoints}"
-    )
+    print("Skipped (missing checkpoints): " f"{summary.skipped_missing_checkpoints}")
     print(f"Skipped (missing FASTA files): {summary.skipped_missing_fastas}")
     print(f"Failed: {summary.failed}")
     print(f"Completed successfully: {summary.completed}")
     if dry_run:
         print("Dry run: no commands were executed.")
     if stopped_early:
-        print("Stopped after the first failed command; remaining runs were not attempted.")
+        print(
+            "Stopped after the first failed command; remaining runs were not attempted."
+        )
 
 
 def run_all(args: argparse.Namespace) -> int:
