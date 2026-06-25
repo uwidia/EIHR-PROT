@@ -22,6 +22,7 @@ def _default_diamond_executable() -> str:
     resolved = resolve_diamond_executable()
     return str(resolved) if resolved is not None else "diamond"
 
+
 MANIFEST_REQUIRED_COLUMNS = {
     "shard_number",
     "local_seq_idx",
@@ -171,7 +172,6 @@ def build_diamond_database(
     training_fasta_path = Path(training_fasta_path).resolve()
     db_prefix = Path(db_prefix).resolve()
     db_prefix.parent.mkdir(parents=True, exist_ok=True)
-    
 
     diamond_executable = resolve_diamond_executable(explicit=config.diamond_exe)
     if diamond_executable is None:
