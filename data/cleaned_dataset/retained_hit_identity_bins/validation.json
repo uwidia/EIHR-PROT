@@ -1,0 +1,29 @@
+{
+  "all_nonempty_retained_hit_sets_have_identity": true,
+  "all_retained_targets_in_training_database": true,
+  "assignment_row_count": 3416,
+  "boundary_policy": {
+    "100": "identity_ge95",
+    "30": "identity_30_lt40",
+    "40": "identity_40_lt50",
+    "50": "identity_50_lt70",
+    "70": "identity_70_lt95",
+    "95": "identity_ge95"
+  },
+  "categories_pairwise_disjoint": true,
+  "categories_union_equals_test_set": true,
+  "category_counts": {
+    "identity_30_lt40": 426,
+    "identity_40_lt50": 342,
+    "identity_50_lt70": 564,
+    "identity_70_lt95": 639,
+    "identity_ge95": 595,
+    "identity_lt30": 231,
+    "no_retained_hit": 619
+  },
+  "expected_test_protein_count_3416": true,
+  "exported_id_and_fasta_membership_agrees_with_assignments": true,
+  "no_retained_hit_rows_have_empty_final_hit_sets": true,
+  "test_protein_count": 3416,
+  "unique_test_protein_count": 3416
+}

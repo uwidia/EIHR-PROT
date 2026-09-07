@@ -1,0 +1,71 @@
+{
+  "aspect_equivalence": {
+    "raw_hits_are_shared": true,
+    "result": "BP, MF, and CC use the same final retained hit membership under this pipeline; only GO-term projection differs.",
+    "retention_occurs_before_go_aspect_annotation_lookup": true
+  },
+  "command": [
+    "scripts\\experiments\\build_retained_hit_identity_bins.py",
+    "--overwrite-output"
+  ],
+  "created_at_utc": "2026-09-07T17:11:18.816117+00:00",
+  "input_artifacts": {
+    "completed_run_pipeline_log": {
+      "bytes": 2953,
+      "path": "C:\\Users\\user\\Desktop\\EIHR-PROT\\EIHR-PROT\\pipeline.log",
+      "sha256": "934202d5552ae3147636e5265ec15aa36c8b842e762b2dede0e0ab9468d09a41"
+    },
+    "diamond_hits_tsv": {
+      "bytes": 284396,
+      "path": "C:\\Users\\user\\Desktop\\EIHR-PROT\\EIHR-PROT\\diamond_db\\test_hits.tsv",
+      "sha256": "ad1900a339dbdc1b79b8f97d2ef81f8a6a09cebb548d5b41051f7dfc4a2d9a17"
+    },
+    "test_fasta": {
+      "bytes": 1254677,
+      "path": "C:\\Users\\user\\Desktop\\EIHR-PROT\\EIHR-PROT\\data\\cleaned_dataset\\cleaned_pdb_test.fasta",
+      "sha256": "13a6409b9720291a0ca2b728a8affae8070a41ffb4adf8dcb7ad9c3f135567d2"
+    },
+    "training_fasta": {
+      "bytes": 8578802,
+      "path": "C:\\Users\\user\\Desktop\\EIHR-PROT\\EIHR-PROT\\diamond_db\\train_db.fasta",
+      "sha256": "2a27977d35d017bbf232812a0a39d051637251bc0af591bccb27cf5d8d52aa26"
+    }
+  },
+  "retention_pipeline_audit": {
+    "duplicate_alignment_rows_discarded": 0,
+    "eligible_hits_before_top_k": 5465,
+    "final_retained_hit_count": 5445,
+    "hits_discarded_by_top_k": 20,
+    "queries_with_eligible_hits_before_top_k": 2797,
+    "queries_with_no_raw_hits": 512,
+    "queries_with_raw_hits": 2904,
+    "queries_with_raw_hits_but_none_eligible": 107,
+    "raw_alignment_rows": 5785,
+    "raw_distinct_query_subject_pairs": 5785,
+    "raw_query_count": 2904
+  },
+  "retention_policy": {
+    "alignment_coordinates": "not available: the saved outfmt lacks qstart qend sstart send",
+    "duplicate_alignment_resolution": "best per (qseqid, sseqid): bitscore desc, qcov desc, evalue asc, pident desc; exact ties retain first TSV record",
+    "eligibility": "E-value <= evalue_max and qcovhsp / 100 >= min_query_coverage; no GO annotation filter",
+    "identity_source": "DIAMOND outfmt pident, retained alignment only; unrounded percentage",
+    "prior_construction_removes_hits_after_retention": false,
+    "ranking_and_top_k": "bitscore desc, qcov desc, evalue asc, sseqid asc; retain first top_k",
+    "test_self_hit_removal": false
+  },
+  "search_and_retention_config": {
+    "diamond_exe": "C:\\Users\\user\\Desktop\\EIHR-PROT\\EIHR-PROT\\diamond.exe",
+    "evalue_max": 1e-05,
+    "iterate": true,
+    "max_target_seqs": 50,
+    "min_query_coverage": 0.3,
+    "sensitivity": "sensitive",
+    "threads": 16,
+    "top_k": 10
+  },
+  "software": {
+    "diamond_version": "diamond version 2.1.24",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "python": "3.11.15 (main, Apr  7 2026, 20:47:24) [MSC v.1944 64 bit (AMD64)]"
+  }
+}

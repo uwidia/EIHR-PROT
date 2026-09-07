@@ -1,0 +1,8 @@
+category,definition,protein_count,percentage_of_full_test_set
+identity_lt30,I_max < 30,231,6.762295081967213
+identity_30_lt40,30 <= I_max < 40,426,12.47072599531616
+identity_40_lt50,40 <= I_max < 50,342,10.011709601873536
+identity_50_lt70,50 <= I_max < 70,564,16.510538641686182
+identity_70_lt95,70 <= I_max < 95,639,18.706088992974237
+identity_ge95,95 <= I_max <= 100,595,17.418032786885245
+no_retained_hit,H_q is empty,619,18.120608899297423
