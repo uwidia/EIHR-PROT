@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import numpy as np
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -20,6 +21,8 @@ from reliability_aware.utils.inference_reporting import (
     save_prediction_metadata,
     save_topk_csv,
 )
+from reliability_aware.utils.bootstrap import PreparedCafaEvaluator, ResamplingPlan, percentile_interval
+from reliability_aware.utils.prediction_cache import PredictionCache, sha256_file, write_prediction_cache
 from reliability_aware.utils.inference_runtime import (
     DatasetKind,
     InferenceSpec,
@@ -195,6 +198,14 @@ def parse_inference_args(
         default=None,
         help="Device override. Defaults to CUDA when available.",
     )
+    bootstrap = parser.add_mutually_exclusive_group()
+    bootstrap.add_argument("--bootstrap", dest="bootstrap", action="store_true", default=True, help="Compute percentile CIs for labeled final evaluation (default).")
+    bootstrap.add_argument("--no-bootstrap", dest="bootstrap", action="store_false", help="Keep original point estimates only.")
+    parser.add_argument("--bootstrap_n_resamples", type=int, default=10000)
+    parser.add_argument("--bootstrap_seed", type=int, default=42)
+    parser.add_argument("--comparator_cache", type=Path, default=None, help="Optional compatible cache; paired CI requires the comparison CLI.")
+    parser.add_argument("--prediction_cache_path", type=Path, default=None, help="Full-output .npz cache written after labeled evaluation.")
+    parser.add_argument("--overwrite_prediction_cache", action="store_true", help="Allow replacement of an existing explicit cache path.")
     parser.add_argument(
         "--allow_unlabeled_predictions",
         action="store_true",
@@ -256,6 +267,8 @@ def _resolve_args(args: argparse.Namespace, spec: InferenceSpec) -> None:
         "go_annotation_path",
         "obo_path",
         "outdir",
+        "prediction_cache_path",
+        "comparator_cache",
     ):
         value = getattr(args, name)
         setattr(args, name, resolve_path(value) if value is not None else None)
@@ -410,6 +423,8 @@ def _save_outputs(
             metrics["mean_homology_gate"] = float(
                 gate_weights[:, 1].mean().item()
             )
+        if args.bootstrap:
+            metrics["bootstrap"] = _single_model_bootstrap(args=args, results=results, go_terms=go_terms, train_annotations=train_annotations)
         metrics_json_path = args.outdir / "metrics.json"
         save_metrics_json(
             metrics=metrics,
@@ -527,3 +542,57 @@ def run_inference(
         results=results,
         train_annotations=train_annotations,
     )
+    _write_prediction_cache_if_requested(args=args, checkpoint=checkpoint, go_terms=go_terms, results=results, train_annotations=train_annotations)
+
+
+def _write_prediction_cache_if_requested(*, args: argparse.Namespace, checkpoint: dict | None,
+                                         go_terms: list[str], results: dict,
+                                         train_annotations: list[set[str]]) -> None:
+    """Persist one lossless cache after a labeled inference pass."""
+    if args.mode != "evaluate" or args.prediction_cache_path is None:
+        return
+    sources = {"test_fasta": args.test_fasta, "go_vocab": args.go_vocab_path,
+               "obo": args.obo_path, "annotations": args.go_annotation_path,
+               "checkpoint": args.checkpoint}
+    source_hashes = {name: {"path": str(path), "sha256": sha256_file(path)}
+                     for name, path in sources.items() if path is not None and path.exists()}
+    cache = PredictionCache(
+        protein_ids=np.asarray(results["labels"], dtype=str),
+        go_terms=np.asarray(go_terms, dtype=str),
+        probabilities=results["y_prob"].detach().cpu().numpy(),
+        labels=results["y_true"].detach().cpu().numpy(),
+        eligibility=np.ones(len(results["labels"]), dtype=bool),
+        gate_weights=(results["gate_weights"].detach().cpu().numpy()
+                      if "gate_weights" in results else None),
+        metadata={"dataset": "PDB", "model_id": args.ablation,
+                  "go_aspect": args.go_aspect, "coverage": "annotation-eligible-only",
+                  "checkpoint_path": str(args.checkpoint) if args.checkpoint else None,
+                  "checkpoint_sha256": sha256_file(args.checkpoint) if args.checkpoint else None,
+                  "checkpoint_hparams": checkpoint.get("hparams") if checkpoint else None,
+                  "source_hashes": source_hashes,
+                  "train_annotations": [sorted(terms) for terms in train_annotations],
+                  "numerical_settings": {"probability_dtype": str(results["y_prob"].dtype),
+                                         "model_mode": "eval; gradients disabled"}},
+    )
+    written = write_prediction_cache(cache, args.prediction_cache_path,
+                                     overwrite=args.overwrite_prediction_cache)
+    LOGGER.info("Saved validated full-output prediction cache: %s", written)
+
+
+def _single_model_bootstrap(*, args: argparse.Namespace, results: dict, go_terms: list[str],
+                            train_annotations: list[set[str]]) -> dict[str, dict[str, float | int]]:
+    """Marginal CIs for one fitted model; paired comparisons use cache CLI."""
+    prepared, eligible = PreparedCafaEvaluator.prepare(
+        y_true=results["y_true"].detach().cpu().numpy(),
+        y_prob=results["y_prob"].detach().cpu().numpy(), go_terms=go_terms,
+        go_aspect=args.go_aspect, obo_path=args.obo_path, train_annotations=train_annotations)
+    ids = np.asarray(results["labels"], dtype=str)[eligible]
+    plan = ResamplingPlan.load_or_create(args.outdir / "bootstrap_plan.npz", dataset="PDB",
+        aspect=args.go_aspect, cohort_name="all_annotation_eligible", protein_ids=ids,
+        n_resamples=args.bootstrap_n_resamples, seed=args.bootstrap_seed)
+    point = prepared.metrics(np.ones(len(ids), dtype=np.int32))
+    replicates = prepared.bootstrap(plan, batch_size=args.batch_size)
+    return {metric: {"point": point[metric], "ci_lower": percentile_interval(values)[0],
+                     "ci_upper": percentile_interval(values)[1], "n_requested": len(values),
+                     "n_valid": int(np.isfinite(values).sum())}
+            for metric, values in replicates.items()}

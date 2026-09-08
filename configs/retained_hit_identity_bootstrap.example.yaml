@@ -1,0 +1,12 @@
+# Paths must be independently tuned fitted checkpoints' full-output caches.
+dataset: PDB
+aspects:
+  BP:
+    full_cache: runs/caches/PDB_BP_sequence_homology_confidence_gate.npz
+    ablation_cache: runs/caches/PDB_BP_sequence_homology_internal_gate.npz
+  MF:
+    full_cache: runs/caches/PDB_MF_sequence_homology_confidence_gate.npz
+    ablation_cache: runs/caches/PDB_MF_sequence_homology_internal_gate.npz
+  CC:
+    full_cache: runs/caches/PDB_CC_sequence_homology_confidence_gate.npz
+    ablation_cache: runs/caches/PDB_CC_sequence_homology_internal_gate.npz
