@@ -43,6 +43,8 @@ def run_randomized_search(
     wandb_mode: str = "online",
     ablation: str | None = None,
     run_type: str = "randomized_search",
+    seed: int | None = None,
+    checkpoint_extra: dict | None = None,
 ) -> list[dict]:
     """
     Randomly samples `num_trials` hyperparameter configurations, trains each
@@ -53,12 +55,28 @@ def run_randomized_search(
     base_dir.mkdir(parents=True, exist_ok=True)
 
     records = []
-    search_rng = random.Random(42)
+    search_rng = random.Random(42 if seed is None else seed)
+    seen = set()
     best_score = -1.0
     best_record = None
 
     for trial in range(num_trials):
         sample_hparams = _sample_hparams(search_space, search_rng)
+        if seed is not None:
+            from reliability_aware.utils.fusion_protocol import seed_run
+            # Sampling RNG is independent of all per-run RNG resets.
+            for _ in range(10000):
+                key = json.dumps(sample_hparams, sort_keys=True)
+                if key not in seen:
+                    seen.add(key)
+                    break
+                sample_hparams = _sample_hparams(search_space, search_rng)
+            else:
+                raise ValueError('Search space exhausted; reduce num_trials')
+            sample_hparams['training_seed'] = seed + trial
+            seed_run(seed + trial, train_loader, val_loader)
+        trial_extra = dict(checkpoint_extra or {})
+        trial_extra.update({'training_seed': seed + trial, 'search_seed': seed}) if seed is not None else None
         print(f"\n{'='*60}")
         print(f"[Search] Trial {trial+1}/{num_trials}  hparams={sample_hparams}")
         print(f"{'='*60}")
@@ -104,6 +122,7 @@ def run_randomized_search(
             patience=patience,
             out_dir=trial_dir,
             hparams=sample_hparams,
+            **({"checkpoint_extra": trial_extra} if checkpoint_extra is not None else {}),
             use_wandb=use_wandb,
             wandb_project=wandb_project,
             wandb_entity=wandb_entity,

@@ -1,17 +1,20 @@
+# Fresh attention/head per candidate; fixed ESM inputs and EIHR homology priors.
+# Both baselines exclude 2VAU-A and 5LSQ-A only from PDB validation.
+# Identity: top-five unmodified-bitscore-weighted nident/min(qlen,slen).
+# a/k are fixed buffers per run; no retained hit uses missing identity and s=0.
 batch_size: 16
 seed: 42
+resources: configs/fusion_baseline_resources.yaml
 num_trials: 20
 trial_epochs: 8
 top_k_params: 5
 patience: 10
 final_epochs: 150
-base_dir_search: runs/sequence_homology_identity_fusion/search
-base_dir_final: runs/sequence_homology_identity_fusion/final
+base_dir_search: runs/sequence_homology_identity_fusion/validation_exclude_two_v1/search
+base_dir_final: runs/sequence_homology_identity_fusion/validation_exclude_two_v1/final
 use_search_results: true
 search_results_path: null
-# Required paths; train uses self-hit-excluded retained evidence.
-train_identity_sidecar_path: null
-val_identity_sidecar_path: null
+# Split sidecars and validation exclusions are in the shared resources YAML.
 search_space:
   learning_rate: [0.0001, 0.0003, 0.001]
   weight_decay: [0.00001, 0.0001, 0.001]

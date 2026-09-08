@@ -116,6 +116,10 @@ def load_model_from_checkpoint(
             "--go_aspect, and --go_vocab_path match the exact training run."
         ) from exc
 
+    from models.sequence_homology_fusion_baselines import _SequenceHomologyFusionBase
+    if isinstance(model, _SequenceHomologyFusionBase):
+        from reliability_aware.utils.fusion_protocol import validate_checkpoint
+        validate_checkpoint(checkpoint, model, go_terms)
     model.eval()
     return model, checkpoint
 

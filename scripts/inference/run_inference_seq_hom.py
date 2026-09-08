@@ -23,7 +23,6 @@ from models.sequence_homology_common import (
 )
 from reliability_aware.utils.inference_utils import InferenceSpec, run_inference
 
-
 SPECS = {
     "sequence_homology_internal_gate": InferenceSpec(
         ablation="sequence_homology_internal_gate",
@@ -42,12 +41,10 @@ SPECS = {
     "sequence_homology_fixed_fusion": InferenceSpec(ablation="sequence_homology_fixed_fusion", dataset_kind="sequence_homology", dataset_cls=SequenceHomologyShardDataset, collate_factory=make_sequence_homology_collate_fn, model_builder=build_sequence_homology_fixed_fusion_model),
     "sequence_homology_identity_fusion": InferenceSpec(ablation="sequence_homology_identity_fusion", dataset_kind="identity_sequence_homology", dataset_cls=IdentitySequenceHomologyShardDataset, collate_factory=make_identity_sequence_homology_collate_fn, model_builder=build_sequence_homology_identity_fusion_model),
 }
-
 GATE_SPECS = {
     "internal": "sequence_homology_internal_gate",
     "confidence": "sequence_homology_confidence_gate",
 }
-
 
 def main(argv: Sequence[str] | None = None) -> None:
     run_inference(
@@ -57,7 +54,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         default_gate="confidence",
         argv=argv,
     )
-
 
 if __name__ == "__main__":
     main()

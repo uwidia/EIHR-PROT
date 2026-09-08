@@ -13,6 +13,11 @@ import json
 from pathlib import Path
 
 import yaml
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 ACTIVE_ABLATIONS = [
     "sequence_only",
@@ -114,14 +119,60 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    from reliability_aware.utils.fusion_protocol import (
+        BASELINES, load_resources, validation_keep_ids, protocol_metadata,
+        bind_run_directory, selected_candidates,
+    )
+    is_fusion = ablation in BASELINES
+    resources = load_resources(hparams['resources']) if is_fusion else None
+    train_dataset, val_dataset = config.train_dataset, config.val_dataset
+    train_manifest, val_manifest = config.train_manifest_path, config.val_manifest_path
+    train_esm, val_esm = config.train_esm_shard_dir, config.val_esm_shard_dir
+    annotation_path, obo_path = config.go_annotation_path, config.obo_path
+    if is_fusion:
+        train, val = resources['pdb_train'], resources['pdb_val']
+        train_dataset, val_dataset = train['fasta'], val['fasta']
+        train_manifest, val_manifest = train['manifest'], val['manifest']
+        train_esm, val_esm = train['esm_shards'], val['esm_shards']
+        train_homology_shard_dir = Path(train['homology_shards'].format(aspect=go_aspect))
+        val_homology_shard_dir = Path(val['homology_shards'].format(aspect=go_aspect))
+        annotation_path, obo_path = resources['train_annotations'], resources['obo']
+        hparams['train_identity_sidecar_path'] = train['identity']
+        hparams['val_identity_sidecar_path'] = val['identity']
+
     go_data = build_go_annotation_data(
-        train_dataset=config.train_dataset,
-        val_dataset=config.val_dataset,
-        go_annotation_path=config.go_annotation_path,
-        obo_path=config.obo_path,
+        train_dataset=train_dataset,
+        val_dataset=val_dataset,
+        go_annotation_path=annotation_path,
+        obo_path=obo_path,
         go_aspect=go_aspect,
         device=device,
     )
+
+    baseline_options = {}
+    if is_fusion:
+        go_data.val_keep_ids = validation_keep_ids(ablation, go_data.val_keep_ids, resources['validation_exclude_ids'])
+        vocab = json.loads(Path(resources['go_vocab'].format(aspect=go_aspect)).read_text())
+        if vocab != go_data.go_terms:
+            raise ValueError('Training vocabulary/order differs from the existing homology vocabulary')
+        from reliability_aware.utils.fusion_preparation import verify_frozen_priors
+        for split in ('pdb_train', 'pdb_val'):
+            verify_frozen_priors(resources, split, go_aspect)
+            if ablation.endswith('identity_fusion'):
+                from models.identity_fusion_data import load_identity_sidecar
+                path = resources[split]['identity']
+                load_identity_sidecar(path)
+                payload = json.loads(Path(path).read_text())
+                expected_excluded = sorted(resources['validation_exclude_ids']) if split == 'pdb_val' else []
+                if payload.get('dataset_split') != split or payload.get('excluded_query_ids') != expected_excluded or payload.get('exclude_self_hits') != (split == 'pdb_train'):
+                    raise ValueError(f'Identity sidecar split/exclusion/self-hit policy mismatch: {path}')
+        metadata = protocol_metadata(ablation=ablation, aspect=go_aspect, go_terms=go_data.go_terms,
+                                     resources=resources, hparams=hparams,
+                                     train_ids=go_data.train_keep_ids, val_ids=go_data.val_keep_ids)
+        bind_run_directory(Path(hparams['base_dir_search' if run_type == 'randomized_search' else 'base_dir_final']) / go_aspect, metadata)
+        baseline_options = {'seed': int(hparams.get('seed', 42)), 'checkpoint_extra': metadata}
+        logger.info('Fusion validation excludes %s; %d eligible proteins remain for %s',
+                    resources['validation_exclude_ids'], len(go_data.val_keep_ids), go_aspect)
 
     run_parameters = {
         "sequence_only": {
@@ -169,7 +220,7 @@ def main():
     if ablation == "homology_only":
         metrics = run_homology_only_evaluation(
             val_homology_shard_dir=val_homology_shard_dir,
-            val_manifest_path=config.val_manifest_path,
+            val_manifest_path=val_manifest,
             val_label_to_indices=go_data.val_label_to_indices,
             val_keep_ids_for_aspect=go_data.val_keep_ids,
             train_label_to_indices=go_data.train_label_to_indices,
@@ -177,7 +228,7 @@ def main():
             go_terms=go_data.go_terms,
             child_parent_pairs=go_data.child_parent_pairs,
             go_aspect=go_aspect,
-            obo_path=config.obo_path,
+            obo_path=obo_path,
             train_annotations=go_data.train_annotations,
             device=device,
             lambda_hier=float(hparams.get("lambda_hier", 0.0)),
@@ -199,14 +250,14 @@ def main():
         return
 
     loader_kwargs = dict(
-        train_esm_shard_dir=config.train_esm_shard_dir,
-        val_esm_shard_dir=config.val_esm_shard_dir,
+        train_esm_shard_dir=train_esm,
+        val_esm_shard_dir=val_esm,
         train_homology_shard_dir=train_homology_shard_dir,
         val_homology_shard_dir=val_homology_shard_dir,
         train_identity_sidecar_path=hparams.get("train_identity_sidecar_path"),
         val_identity_sidecar_path=hparams.get("val_identity_sidecar_path"),
-        train_manifest_path=config.train_manifest_path,
-        val_manifest_path=config.val_manifest_path,
+        train_manifest_path=train_manifest,
+        val_manifest_path=val_manifest,
         train_keep_ids_for_aspect=go_data.train_keep_ids,
         val_keep_ids_for_aspect=go_data.val_keep_ids,
         train_label_to_indices=go_data.train_label_to_indices,
@@ -223,6 +274,7 @@ def main():
         collate_factory=model_specific_params["collate_factory"],
         filter_invalid_samples=model_specific_params["filter_invalid_samples"],
         **loader_kwargs,
+        **({"seed": baseline_options["seed"]} if is_fusion else {}),
     )
 
     if run_type == "randomized_search":
@@ -232,7 +284,7 @@ def main():
             go_terms=go_data.go_terms,
             child_parent_pairs=go_data.child_parent_pairs,
             go_aspect=go_aspect,
-            obo_path=config.obo_path,
+            obo_path=obo_path,
             train_annotations=go_data.train_annotations,
             search_space=hparams["search_space"],
             device=device,
@@ -255,6 +307,7 @@ def main():
             wandb_mode=hparams.get("wandb_mode", "online"),
             ablation=ablation,
             run_type=run_type,
+            **baseline_options,
         )
 
     elif run_type == "full_training":
@@ -263,10 +316,13 @@ def main():
             selected_path = Path(selected_path)
             if not selected_path.exists():
                 raise FileNotFoundError(f"Missing sorted search results: {selected_path}; run randomized_search first")
-            promising_hparams = [row["hparams"] for row in json.loads(selected_path.read_text())[: int(hparams["top_k_params"])]]
+            promising_hparams = (selected_candidates(selected_path, int(hparams['top_k_params']), metadata)
+                                 if is_fusion else [row["hparams"] for row in json.loads(selected_path.read_text())[: int(hparams["top_k_params"])]] )
             if not promising_hparams:
                 raise ValueError("Search results contained no candidate hyperparameters")
         else:
+            if is_fusion:
+                raise ValueError('Fusion baselines require use_search_results: true')
             promising_hparams = [hparams["promising_hparams"][go_aspect]]
         run_model_training(
             promising_hparams=promising_hparams,
@@ -277,7 +333,7 @@ def main():
             go_terms=go_data.go_terms,
             child_parent_pairs=go_data.child_parent_pairs,
             go_aspect=go_aspect,
-            obo_path=config.obo_path,
+            obo_path=obo_path,
             train_annotations=go_data.train_annotations,
             build_model_fn=model_specific_params["build_model_fn"],
             fit_function=fit_model,
@@ -293,6 +349,7 @@ def main():
             wandb_mode=hparams.get("wandb_mode", "online"),
             ablation=ablation,
             run_type=run_type,
+            **baseline_options,
         )
 
 

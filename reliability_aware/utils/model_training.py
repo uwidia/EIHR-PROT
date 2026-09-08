@@ -67,6 +67,8 @@ def run_model_training(
     wandb_mode: str = "online",
     ablation: str | None = None,
     run_type: str = "full_training",
+    seed: int | None = None,
+    checkpoint_extra: dict | None = None,
 ) -> dict | None:
     """
     Trains each promising hyperparameter configuration to convergence.
@@ -80,6 +82,13 @@ def run_model_training(
     best_run = None
 
     for run_id, hparams in enumerate(promising_hparams):
+        hparams = deepcopy(hparams)
+        run_extra = dict(checkpoint_extra or {})
+        if seed is not None:
+            from reliability_aware.utils.fusion_protocol import seed_run
+            hparams['training_seed'] = seed + 10000 + run_id
+            seed_run(hparams['training_seed'], train_loader, val_loader)
+            run_extra.update({'training_seed': hparams['training_seed'], 'search_seed': seed})
         run_dir = base_dir / f"run_{run_id:03d}"
         run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -113,6 +122,7 @@ def run_model_training(
             patience=patience,
             out_dir=run_dir,
             hparams=hparams,
+            **({"checkpoint_extra": run_extra} if checkpoint_extra is not None else {}),
             use_wandb=use_wandb,
             wandb_project=wandb_project,
             wandb_entity=wandb_entity,
@@ -129,6 +139,9 @@ def run_model_training(
 
         record = build_record(run_id, history, hparams, id_key="run_id")
         record["checkpoint_path"] = str(run_dir / "best_model.pt")
+        if checkpoint_extra is not None:
+            record['best_epoch'] = history.get('best_epoch')
+            record['training_seed'] = hparams.get('training_seed')
         best_score, best_run = save_and_track_best(
             record=record,
             records=results,
@@ -143,10 +156,19 @@ def run_model_training(
             print(f"  *** New best: {best_score:.4f} ***")
 
     print(f"\n[Final training complete] Best val_Fmax: {best_score:.4f}")
+    if checkpoint_extra is not None:
+        import json
+        (base_dir / 'final_results.json').write_text(json.dumps(sorted(results, key=lambda r: r['score'], reverse=True), indent=2))
     if best_run:
         canonical = base_dir / "best_model.pt"
         shutil.copy2(best_run["checkpoint_path"], canonical)
-        (base_dir / "best_model_metadata.json").write_text(__import__("json").dumps(best_run, indent=2))
+        summary = dict(best_run)
+        if checkpoint_extra is not None:
+            selected = torch.load(canonical, map_location='cpu', weights_only=False)
+            summary.update({k: selected[k] for k in ('epoch', 'fusion_parameters', 'model_type', 'go_aspect',
+                           'go_terms', 'go_terms_sha256', 'validation_exclude_ids', 'resources', 'adaptation',
+                           'fusion_protocol_version', 'training_seed', 'search_seed') if k in selected})
+        (base_dir / "best_model_metadata.json").write_text(__import__("json").dumps(summary, indent=2))
         print(f"Best run hparams: {best_run['hparams']}")
     return best_run
 
@@ -490,6 +512,9 @@ def fit_model(
                 "hparams": hparams,
             }
             checkpoint.update(checkpoint_extra)
+            if checkpoint_extra.get('fusion_protocol_version'):
+                from reliability_aware.utils.fusion_protocol import fusion_parameters
+                checkpoint['fusion_parameters'] = fusion_parameters(model)
 
             torch.save(checkpoint, best_path)
 
@@ -511,6 +536,8 @@ def fit_model(
                 f" | gate_h={val_metrics['mean_homology_gate']:.3f}"
             )
 
+        if checkpoint_extra.get('fusion_protocol_version'):
+            message += f' | best_epoch={best_epoch} | consecutive_non_improvement={bad_epochs}'
         print(message)
 
         if bad_epochs >= patience:

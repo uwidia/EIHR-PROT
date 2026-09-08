@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import torch
 import torch.nn as nn
 
@@ -11,7 +12,7 @@ from models.sequence_homology_common import ESMSequenceBranch, SequencePredictio
 
 def identity_neural_weight(identity_fraction: torch.Tensor, a: float, k: float) -> torch.Tensor:
     """InterLabelGO-inspired neural weight: a + (1-a) exp(-k*s)."""
-    if not 0.0 <= float(a) <= 1.0 or float(k) < 0.0:
+    if not 0.0 <= float(a) <= 1.0 or not math.isfinite(float(k)) or float(k) < 0.0:
         raise ValueError("identity fusion requires 0 <= a <= 1 and k >= 0")
     if not torch.isfinite(identity_fraction).all() or not ((identity_fraction >= 0) & (identity_fraction <= 1)).all():
         raise ValueError("identity fractions must be finite values in [0, 1]")
@@ -48,7 +49,7 @@ class SequenceHomologyIdentityFusionModel(_SequenceHomologyFusionBase):
     """Fresh neural branch fused using fixed, candidate-specific a/k buffers."""
     def __init__(self, num_go_terms: int, a: float, k: float, **kwargs):
         super().__init__(num_go_terms, **kwargs)
-        if not 0.0 <= float(a) <= 1.0 or float(k) < 0.0:
+        if not 0.0 <= float(a) <= 1.0 or not math.isfinite(float(k)) or float(k) < 0.0:
             raise ValueError("identity fusion requires 0 <= a <= 1 and k >= 0")
         self.register_buffer("identity_a", torch.tensor(float(a)))
         self.register_buffer("identity_k", torch.tensor(float(k)))

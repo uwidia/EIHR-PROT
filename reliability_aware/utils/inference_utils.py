@@ -22,7 +22,7 @@ from reliability_aware.utils.inference_reporting import (
     save_topk_csv,
 )
 from reliability_aware.utils.bootstrap import PreparedCafaEvaluator, ResamplingPlan, percentile_interval
-from reliability_aware.utils.prediction_cache import PredictionCache, sha256_file, write_prediction_cache
+from reliability_aware.utils.inference_cache import _write_prediction_cache_if_requested
 from reliability_aware.utils.inference_runtime import (
     DatasetKind,
     InferenceSpec,
@@ -154,6 +154,8 @@ def parse_inference_args(
             "Defaults to diamond_db/<GO_ASPECT>/test_homology_shards."
         ),
     )
+    parser.add_argument("--dataset_id", default="PDB", help="Dataset provenance label; fusion runner supplies pdb_test or af_test.")
+    parser.add_argument("--train_go_annotation_path", type=Path, default=None, help="Optional separate training annotations for fixed IC on AF evaluation.")
     parser.add_argument("--identity_sidecar_path", type=Path, default=None, help="Validated retained-hit top-five identity sidecar (identity fusion only).")
     parser.add_argument(
         "--go_vocab_path",
@@ -341,7 +343,7 @@ def _build_evaluation_targets(
     go_term_to_idx = {go: i for i, go in enumerate(go_terms)}
     train_label_to_indices, train_keep_ids = build_label_indices_for_split(
         fasta_path=args.train_fasta,
-        go_annotation_path=args.go_annotation_path,
+        go_annotation_path=getattr(args, "train_go_annotation_path", None) or args.go_annotation_path,
         obo_path=args.obo_path,
         go_aspect=args.go_aspect,
         go_term_to_idx=go_term_to_idx,
@@ -380,6 +382,14 @@ def _load_model(
         go_terms=go_terms,
         device=device,
     )
+    if args.ablation in {'sequence_homology_fixed_fusion', 'sequence_homology_identity_fusion'}:
+        if checkpoint.get('model_type') != args.ablation or checkpoint.get('go_aspect') != args.go_aspect:
+            raise ValueError('Fusion checkpoint model/aspect mismatch')
+        if args.ablation.endswith('identity_fusion'):
+            import json
+            sidecar = json.loads(args.identity_sidecar_path.read_text())
+            if sidecar.get('dataset_split') != args.dataset_id:
+                raise ValueError('Identity sidecar dataset mismatch; set --dataset_id pdb_test or af_test')
     LOGGER.info("Loaded checkpoint epoch=%s", checkpoint.get("epoch"))
     return model, checkpoint
 
@@ -539,6 +549,9 @@ def run_inference(
         top_k=args.top_k,
         device=device,
     )
+    if args.ablation in {'sequence_homology_fixed_fusion', 'sequence_homology_identity_fusion'} and args.mode == 'evaluate':
+        if set(results['labels']) != set(test_keep_ids) or len(results['labels']) != len(test_keep_ids):
+            raise ValueError('Fusion inference did not cover the complete aspect-eligible test cohort')
     enrich_topk_rows(results["topk_rows"], go_metadata)
     _save_outputs(
         args=args,
@@ -548,40 +561,6 @@ def run_inference(
         train_annotations=train_annotations,
     )
     _write_prediction_cache_if_requested(args=args, checkpoint=checkpoint, go_terms=go_terms, results=results, train_annotations=train_annotations)
-
-
-def _write_prediction_cache_if_requested(*, args: argparse.Namespace, checkpoint: dict | None,
-                                         go_terms: list[str], results: dict,
-                                         train_annotations: list[set[str]]) -> None:
-    """Persist one lossless cache after a labeled inference pass."""
-    if args.mode != "evaluate" or args.prediction_cache_path is None:
-        return
-    sources = {"test_fasta": args.test_fasta, "go_vocab": args.go_vocab_path,
-               "obo": args.obo_path, "annotations": args.go_annotation_path,
-               "checkpoint": args.checkpoint}
-    source_hashes = {name: {"path": str(path), "sha256": sha256_file(path)}
-                     for name, path in sources.items() if path is not None and path.exists()}
-    cache = PredictionCache(
-        protein_ids=np.asarray(results["labels"], dtype=str),
-        go_terms=np.asarray(go_terms, dtype=str),
-        probabilities=results["y_prob"].detach().cpu().numpy(),
-        labels=results["y_true"].detach().cpu().numpy(),
-        eligibility=np.ones(len(results["labels"]), dtype=bool),
-        gate_weights=(results["gate_weights"].detach().cpu().numpy()
-                      if "gate_weights" in results else None),
-        metadata={"dataset": "PDB", "model_id": args.ablation,
-                  "go_aspect": args.go_aspect, "coverage": "annotation-eligible-only",
-                  "checkpoint_path": str(args.checkpoint) if args.checkpoint else None,
-                  "checkpoint_sha256": sha256_file(args.checkpoint) if args.checkpoint else None,
-                  "checkpoint_hparams": checkpoint.get("hparams") if checkpoint else None,
-                  "source_hashes": source_hashes,
-                  "train_annotations": [sorted(terms) for terms in train_annotations],
-                  "numerical_settings": {"probability_dtype": str(results["y_prob"].dtype),
-                                         "model_mode": "eval; gradients disabled"}},
-    )
-    written = write_prediction_cache(cache, args.prediction_cache_path,
-                                     overwrite=args.overwrite_prediction_cache)
-    LOGGER.info("Saved validated full-output prediction cache: %s", written)
 
 
 def _single_model_bootstrap(*, args: argparse.Namespace, results: dict, go_terms: list[str],
