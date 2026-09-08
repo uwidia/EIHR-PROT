@@ -44,7 +44,7 @@ promising_hparams:
     attn_dropout: 0.1
     head_hidden_dim: 512
     head_dropout: 0.2
-    lambda_hier: 0.0
+    lambda_hier: 0.01
     pos_weight_cap: 10.0
 
   CC:
