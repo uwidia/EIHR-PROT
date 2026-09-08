@@ -424,12 +424,27 @@ def _parse_diamond_hits(tsv_path: str | Path) -> dict[str, list[HomologyHit]]:
         for row in reader:
             if not row:
                 continue
+            context = f"{tsv_path}: line {reader.line_num}"
             if len(row) not in (9, 10):
-                raise ValueError("DIAMOND rows must have 9 legacy or 10 nident-enriched fields")
-            qlen, slen = int(row[5]), int(row[6])
-            nident = None if len(row) == 9 else int(row[9])
+                raise ValueError(f"{context}: DIAMOND rows must have 9 legacy or 10 nident-enriched fields; got {len(row)}")
+            context += f" ({row[0]}/{row[1]})"
+            try:
+                qlen, slen = int(row[5]), int(row[6])
+                nident = None if len(row) == 9 else int(row[9])
+            except ValueError as exc:
+                raise ValueError(
+                    f"{context}: DIAMOND qlen, slen, and nident must be exact integers; "
+                    f"qlen={row[5]!r}, slen={row[6]!r}, "
+                    f"nident={row[9] if len(row) == 10 else None!r}"
+                ) from exc
             if qlen <= 0 or slen <= 0 or (nident is not None and not 0 <= nident <= min(qlen, slen)):
-                raise ValueError("DIAMOND nident must be exact and in [0, min(qlen, slen)]")
+                raise ValueError(
+                    f"{context}: DIAMOND lengths must be positive and nident must be "
+                    f"in [0, min(qlen, slen)]; qlen={qlen}, slen={slen}, nident={nident}. "
+                    "Regenerate the hits; do not clamp nident or discard invalid rows. "
+                    "If the search used --iterate, retry without it into a new file "
+                    "and compare retained evidence before reusing homology priors."
+                )
             hit = HomologyHit(
                 qseqid=row[0], sseqid=row[1], evalue=float(row[2]), bitscore=float(row[3]),
                 qcov=float(row[4]) / 100.0, qlen=qlen, slen=slen, length=int(row[7]),
