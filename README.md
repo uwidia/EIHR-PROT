@@ -94,10 +94,23 @@ Use the same selected extra when running project commands, for example
 ### 6. DIAMOND Installation
 To run DIAMOND and obtain homology priors, [download the compatible DIAMONDv2.1.24 release](https://github.com/bbuchfink/diamond/releases) for your operating system.
 
-On Linux, make the downloaded executable runnable:
+On Linux, make the downloaded executable runnable and configure it before
+running any homology commands. `uv` installs Python dependencies only; it does
+not install the external `diamond` command.
 
 ```bash
 chmod +x path_to_diamond_executable
+
+# Option A: use a DIAMOND binary placed in the repository root.
+# Run this from the repository root; repeat it in each new shell session.
+export PATH="$PWD:$PATH"
+
+# Option B: use a binary stored elsewhere.
+# export DIAMOND_EXECUTABLE="/absolute/path/to/diamond"
+
+# Confirm that the command is discoverable before continuing.
+command -v diamond
+diamond version
 ```
 
 On Windows, place `diamond.exe` in the
@@ -109,8 +122,9 @@ Unblock-File .\diamond.exe
 $env:DIAMOND_EXECUTABLE = (Resolve-Path .\diamond.exe)
 ```
 
-On Linux, either put `diamond` on `PATH` or set `DIAMOND_EXECUTABLE` to its
-absolute path before running the scripts.
+If `diamond version` fails, it is not available in the current shell even if
+the executable is present in the project directory. Re-run the `export PATH`
+command above, or set `DIAMOND_EXECUTABLE` to the executable's absolute path.
 
 ---
 
