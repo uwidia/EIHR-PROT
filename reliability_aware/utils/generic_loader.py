@@ -90,7 +90,7 @@ class HybridBatchSampler(Sampler):
             yield batch
 
 
-DatasetKind = Literal["sequence", "sequence_homology"]
+DatasetKind = Literal["sequence", "sequence_homology", "identity_sequence_homology"]
 
 
 def _build_dataset_kwargs(
@@ -105,6 +105,8 @@ def _build_dataset_kwargs(
     val_manifest_path,
     train_keep_ids_for_aspect,
     val_keep_ids_for_aspect,
+    train_identity_sidecar_path=None,
+    val_identity_sidecar_path=None,
 ):
     is_train = split == "train"
 
@@ -122,13 +124,19 @@ def _build_dataset_kwargs(
             "keep_ids": keep_ids,
         }
 
-    if dataset_kind == "sequence_homology":
-        return {
+    if dataset_kind in {"sequence_homology", "identity_sequence_homology"}:
+        kwargs = {
             "esm_shard_dir": esm_shard_dir,
             "homology_shard_dir": homology_shard_dir,
             "manifest_path": manifest_path,
             "keep_ids": keep_ids,
         }
+        if dataset_kind == "identity_sequence_homology":
+            identity_sidecar_path = train_identity_sidecar_path if is_train else val_identity_sidecar_path
+            if identity_sidecar_path is None:
+                raise ValueError("identity_sequence_homology requires split-specific identity sidecars")
+            kwargs["identity_sidecar_path"] = identity_sidecar_path
+        return kwargs
 
     raise ValueError(f"Unknown dataset_kind: {dataset_kind}")
 
@@ -175,6 +183,8 @@ def build_model_loaders(
     seed: int = 42,
     active_shards: int = 3,
     lookahead_factor: int = 3,
+    train_identity_sidecar_path=None,
+    val_identity_sidecar_path=None,
 ):
     train_dataset = dataset_cls(
         **_build_dataset_kwargs(
@@ -188,6 +198,8 @@ def build_model_loaders(
             val_manifest_path=val_manifest_path,
             train_keep_ids_for_aspect=train_keep_ids_for_aspect,
             val_keep_ids_for_aspect=val_keep_ids_for_aspect,
+            train_identity_sidecar_path=train_identity_sidecar_path,
+            val_identity_sidecar_path=val_identity_sidecar_path,
         )
     )
 
@@ -203,6 +215,8 @@ def build_model_loaders(
             val_manifest_path=val_manifest_path,
             train_keep_ids_for_aspect=train_keep_ids_for_aspect,
             val_keep_ids_for_aspect=val_keep_ids_for_aspect,
+            train_identity_sidecar_path=train_identity_sidecar_path,
+            val_identity_sidecar_path=val_identity_sidecar_path,
         )
     )
 

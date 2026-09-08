@@ -1,0 +1,25 @@
+batch_size: 16
+seed: 42
+num_trials: 20
+trial_epochs: 8
+top_k_params: 5
+patience: 10
+final_epochs: 150
+base_dir_search: runs/sequence_homology_identity_fusion/search
+base_dir_final: runs/sequence_homology_identity_fusion/final
+use_search_results: true
+search_results_path: null
+# Required paths; train uses self-hit-excluded retained evidence.
+train_identity_sidecar_path: null
+val_identity_sidecar_path: null
+search_space:
+  learning_rate: [0.0001, 0.0003, 0.001]
+  weight_decay: [0.00001, 0.0001, 0.001]
+  attn_hidden_dim: [128, 256, 512]
+  attn_dropout: [0.0, 0.1, 0.2, 0.3]
+  head_hidden_dim: [512]
+  head_dropout: [0.0, 0.1, 0.2, 0.3]
+  lambda_hier: [0.0, 0.001, 0.01]
+  pos_weight_cap: [5.0, 10.0, 20.0]
+  identity_a: [0.0, 0.25, 0.45, 0.7, 1.0]
+  identity_k: [0.0, 0.5, 1.5, 4.0, 5.0]

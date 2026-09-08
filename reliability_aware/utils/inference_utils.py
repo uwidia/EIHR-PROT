@@ -154,6 +154,7 @@ def parse_inference_args(
             "Defaults to diamond_db/<GO_ASPECT>/test_homology_shards."
         ),
     )
+    parser.add_argument("--identity_sidecar_path", type=Path, default=None, help="Validated retained-hit top-five identity sidecar (identity fusion only).")
     parser.add_argument(
         "--go_vocab_path",
         type=Path,
@@ -280,7 +281,7 @@ def _resolve_args(args: argparse.Namespace, spec: InferenceSpec) -> None:
     )
     if (
         args.test_homology_shard_dir is None
-        and spec.dataset_kind in {"sequence_homology", "homology"}
+        and spec.dataset_kind in {"sequence_homology", "identity_sequence_homology", "homology"}
     ):
         args.test_homology_shard_dir = (
             PROJECT_ROOT / "diamond_db" / args.go_aspect / "test_homology_shards"
@@ -314,12 +315,15 @@ def _validate_inputs(args: argparse.Namespace, spec: InferenceSpec) -> None:
         )
     if args.checkpoint is not None:
         required_paths.append((args.checkpoint, "checkpoint"))
-    if spec.dataset_kind in {"sequence", "sequence_homology"}:
+    if spec.dataset_kind in {"sequence", "sequence_homology", "identity_sequence_homology"}:
         required_paths.append((args.test_esm_shard_dir, "test ESM shard directory"))
-    if spec.dataset_kind in {"sequence_homology", "homology"}:
+    if spec.dataset_kind in {"sequence_homology", "identity_sequence_homology", "homology"}:
         required_paths.append(
             (args.test_homology_shard_dir, "test homology shard directory")
         )
+
+    if spec.dataset_kind == "identity_sequence_homology":
+        required_paths.append((args.identity_sidecar_path, "identity sidecar"))
 
     for path, description in required_paths:
         require_path(path, description)
@@ -515,6 +519,7 @@ def run_inference(
         test_esm_shard_dir=args.test_esm_shard_dir,
         test_manifest_path=args.test_manifest_path,
         test_homology_shard_dir=args.test_homology_shard_dir,
+        identity_sidecar_path=args.identity_sidecar_path,
         test_label_to_indices=test_label_to_indices,
         test_keep_ids=test_keep_ids,
         go_terms=go_terms,

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import json
 from pathlib import Path
 
 import yaml
@@ -18,6 +19,8 @@ ACTIVE_ABLATIONS = [
     "homology_only",
     "sequence_homology_internal_gate",
     "sequence_homology_confidence_gate",
+    "sequence_homology_fixed_fusion",
+    "sequence_homology_identity_fusion",
 ]
 
 
@@ -76,6 +79,14 @@ def main():
         build_sequence_homology_internal_gate_model,
         run_one_batch_smoke_test_sequence_homology_confidence_gate,
         run_one_batch_smoke_test_sequence_homology_internal_gate,
+    )
+    from models.sequence_homology_fusion_baselines import (
+        build_sequence_homology_fixed_fusion_model,
+        build_sequence_homology_identity_fusion_model,
+    )
+    from models.identity_fusion_data import (
+        IdentitySequenceHomologyShardDataset,
+        make_identity_sequence_homology_collate_fn,
     )
     from models.sequence_homology_common import (
         SequenceHomologyShardDataset,
@@ -137,6 +148,22 @@ def main():
             "filter_invalid_samples": False,
             "smoke_test_fn": run_one_batch_smoke_test_sequence_homology_confidence_gate,
         },
+        "sequence_homology_fixed_fusion": {
+            "build_model_fn": build_sequence_homology_fixed_fusion_model,
+            "dataset_cls": SequenceHomologyShardDataset,
+            "dataset_kind": "sequence_homology",
+            "collate_factory": make_sequence_homology_collate_fn,
+            "filter_invalid_samples": False,
+            "smoke_test_fn": None,
+        },
+        "sequence_homology_identity_fusion": {
+            "build_model_fn": build_sequence_homology_identity_fusion_model,
+            "dataset_cls": IdentitySequenceHomologyShardDataset,
+            "dataset_kind": "identity_sequence_homology",
+            "collate_factory": make_identity_sequence_homology_collate_fn,
+            "filter_invalid_samples": False,
+            "smoke_test_fn": None,
+        },
     }
 
     if ablation == "homology_only":
@@ -176,6 +203,8 @@ def main():
         val_esm_shard_dir=config.val_esm_shard_dir,
         train_homology_shard_dir=train_homology_shard_dir,
         val_homology_shard_dir=val_homology_shard_dir,
+        train_identity_sidecar_path=hparams.get("train_identity_sidecar_path"),
+        val_identity_sidecar_path=hparams.get("val_identity_sidecar_path"),
         train_manifest_path=config.train_manifest_path,
         val_manifest_path=config.val_manifest_path,
         train_keep_ids_for_aspect=go_data.train_keep_ids,
@@ -229,8 +258,18 @@ def main():
         )
 
     elif run_type == "full_training":
+        if hparams.get("use_search_results", False):
+            selected_path = hparams.get("search_results_path") or (Path(hparams["base_dir_search"]) / go_aspect / "search_results.json")
+            selected_path = Path(selected_path)
+            if not selected_path.exists():
+                raise FileNotFoundError(f"Missing sorted search results: {selected_path}; run randomized_search first")
+            promising_hparams = [row["hparams"] for row in json.loads(selected_path.read_text())[: int(hparams["top_k_params"])]]
+            if not promising_hparams:
+                raise ValueError("Search results contained no candidate hyperparameters")
+        else:
+            promising_hparams = [hparams["promising_hparams"][go_aspect]]
         run_model_training(
-            promising_hparams=[hparams["promising_hparams"][go_aspect]],
+            promising_hparams=promising_hparams,
             train_loader=train_loader,
             val_loader=val_loader,
             train_keep_ids_for_aspect=go_data.train_keep_ids,

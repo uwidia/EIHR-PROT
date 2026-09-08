@@ -7,7 +7,9 @@ run_seq_only_training: Wrapper for sequence-only ablation
 from __future__ import annotations
 from copy import deepcopy
 import copy
+import math
 from pathlib import Path
+import shutil
 from typing import Literal
 import torch
 import wandb
@@ -126,6 +128,7 @@ def run_model_training(
         )
 
         record = build_record(run_id, history, hparams, id_key="run_id")
+        record["checkpoint_path"] = str(run_dir / "best_model.pt")
         best_score, best_run = save_and_track_best(
             record=record,
             records=results,
@@ -141,8 +144,10 @@ def run_model_training(
 
     print(f"\n[Final training complete] Best val_Fmax: {best_score:.4f}")
     if best_run:
+        canonical = base_dir / "best_model.pt"
+        shutil.copy2(best_run["checkpoint_path"], canonical)
+        (base_dir / "best_model_metadata.json").write_text(__import__("json").dumps(best_run, indent=2))
         print(f"Best run hparams: {best_run['hparams']}")
-
     return best_run
 
 
@@ -313,6 +318,10 @@ def model_forward_from_batch(model, batch):
         inputs["homology_scores"] = batch["homology_scores"]
     if batch.get("gate_features") is not None:
         inputs["gate_features"] = batch["gate_features"]
+    if batch.get("identity_fraction") is not None:
+        inputs["identity_fraction"] = batch["identity_fraction"]
+    if batch.get("has_retained_hit") is not None:
+        inputs["has_retained_hit"] = batch["has_retained_hit"]
 
     return model(**inputs)
 
@@ -324,6 +333,8 @@ def move_batch_to_device(batch: dict, device):
         "graph_batch",
         "homology_scores",
         "gate_features",
+        "identity_fraction",
+        "has_retained_hit",
         "targets",
     ]:
         if batch.get(key) is not None:
@@ -462,6 +473,8 @@ def fit_model(
         torch.save(history, history_path)
 
         current_fmax = val_metrics["Fmax"]
+        if not math.isfinite(float(current_fmax)):
+            raise RuntimeError("Non-finite validation Fmax; refusing to select a checkpoint")
 
         if current_fmax > best_fmax:
             best_fmax = current_fmax
@@ -503,6 +516,11 @@ def fit_model(
         if bad_epochs >= patience:
             print(f"Early stopping at epoch {epoch}. Best epoch: {best_epoch}")
             break
+
+    history["best_epoch"] = best_epoch
+    history["best_fmax"] = best_fmax
+    history["consecutive_non_improvement"] = bad_epochs
+    torch.save(history, history_path)
 
     if best_path.exists():
         checkpoint = torch.load(best_path, map_location=device)

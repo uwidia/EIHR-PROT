@@ -21,7 +21,7 @@ from reliability_aware.utils.model_training import (
 )
 from reliability_aware.utils.parser import get_protein_info
 
-DatasetKind = Literal["sequence", "sequence_homology", "homology"]
+DatasetKind = Literal["sequence", "sequence_homology", "identity_sequence_homology", "homology"]
 
 
 @dataclass(frozen=True)
@@ -126,6 +126,7 @@ def build_test_loader(
     test_esm_shard_dir: Path,
     test_manifest_path: Path,
     test_homology_shard_dir: Path | None,
+    identity_sidecar_path: Path | None,
     test_label_to_indices: dict[str, list[int]] | None,
     test_keep_ids: set[str],
     go_terms: list[str],
@@ -154,17 +155,17 @@ def build_test_loader(
             label_to_indices=test_label_to_indices,
             num_go_terms=len(go_terms),
         )
-    elif dataset_kind == "sequence_homology":
+    elif dataset_kind in {"sequence_homology", "identity_sequence_homology"}:
         if test_homology_shard_dir is None:
             raise ValueError(
                 "sequence+homology models require --test_homology_shard_dir"
             )
-        dataset = spec.dataset_cls(
-            esm_shard_dir=test_esm_shard_dir,
-            homology_shard_dir=test_homology_shard_dir,
-            manifest_path=test_manifest_path,
-            keep_ids=keep_ids,
-        )
+        kwargs = {"esm_shard_dir": test_esm_shard_dir, "homology_shard_dir": test_homology_shard_dir, "manifest_path": test_manifest_path, "keep_ids": keep_ids}
+        if dataset_kind == "identity_sequence_homology":
+            if identity_sidecar_path is None:
+                raise ValueError("identity fusion requires --identity_sidecar_path")
+            kwargs["identity_sidecar_path"] = identity_sidecar_path
+        dataset = spec.dataset_cls(**kwargs)
         collate_fn = spec.collate_factory(
             label_to_indices=test_label_to_indices,
             num_go_terms=len(go_terms),

@@ -3,6 +3,7 @@ import csv
 import json
 import logging
 import math
+import hashlib
 import subprocess
 from collections import defaultdict
 from dataclasses import dataclass, asdict, field
@@ -42,7 +43,10 @@ DIAMOND_OUTFMT_FIELDS = [
     "slen",
     "length",
     "pident",
+    "nident",
 ]
+LEGACY_DIAMOND_OUTFMT_FIELDS = DIAMOND_OUTFMT_FIELDS[:-1]
+DIAMOND_TSV_SCHEMA_VERSION = "eihr-diamond-hits-v2-nident"
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,9 @@ class HomologyHit:
     slen: int
     length: int
     pident: float
+    # Exact DIAMOND count. It is optional only for legacy evidence consumed by
+    # the original homology branch; identity fusion requires it.
+    nident: int | None = None
 
 
 @dataclass(frozen=True)
@@ -244,6 +251,11 @@ def run_diamond_blastp(
     return output_tsv_path
 
 
+def diamond_tsv_metadata(path: str | Path) -> dict:
+    path = Path(path).resolve()
+    return {"format_version": DIAMOND_TSV_SCHEMA_VERSION, "fields": DIAMOND_OUTFMT_FIELDS, "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
 def build_aligned_homology_shards(
     manifest_path: str | Path,
     diamond_hits: str | Path,
@@ -412,17 +424,16 @@ def _parse_diamond_hits(tsv_path: str | Path) -> dict[str, list[HomologyHit]]:
         for row in reader:
             if not row:
                 continue
-
+            if len(row) not in (9, 10):
+                raise ValueError("DIAMOND rows must have 9 legacy or 10 nident-enriched fields")
+            qlen, slen = int(row[5]), int(row[6])
+            nident = None if len(row) == 9 else int(row[9])
+            if qlen <= 0 or slen <= 0 or (nident is not None and not 0 <= nident <= min(qlen, slen)):
+                raise ValueError("DIAMOND nident must be exact and in [0, min(qlen, slen)]")
             hit = HomologyHit(
-                qseqid=row[0],
-                sseqid=row[1],
-                evalue=float(row[2]),
-                bitscore=float(row[3]),
-                qcov=float(row[4]) / 100.0,
-                qlen=int(row[5]),
-                slen=int(row[6]),
-                length=int(row[7]),
-                pident=float(row[8]),
+                qseqid=row[0], sseqid=row[1], evalue=float(row[2]), bitscore=float(row[3]),
+                qcov=float(row[4]) / 100.0, qlen=qlen, slen=slen, length=int(row[7]),
+                pident=float(row[8]), nident=nident,
             )
 
             key = (hit.qseqid, hit.sseqid)

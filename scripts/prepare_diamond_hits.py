@@ -1,6 +1,10 @@
 import argparse
 import logging
 from pathlib import Path
+import sys
+PROJECT_ROOT_FOR_IMPORT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT_FOR_IMPORT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT_FOR_IMPORT))
 
 from reliability_aware.utils.config import (
     PROJECT_ROOT,
@@ -98,6 +102,8 @@ def main() -> None:
         default=PROJECT_ROOT / "data/cleaned_dataset" / "cleaned_pdb_val.fasta",
         help="Path to the validation FASTA used to generate validation search queries.",
     )
+    parser.add_argument("--af_test_dataset", type=Path, default=PROJECT_ROOT / "data/cleaned_dataset" / "cleaned_af_test.fasta", help="AF test FASTA; queried against the PDB-training DB only.")
+    parser.add_argument("--output_dir", type=Path, default=diamond_directory, help="Dataset-qualified output directory; do not overwrite legacy raw hits.")
     parser.add_argument(
         "--test_dataset",
         type=Path,
@@ -109,22 +115,25 @@ def main() -> None:
     cfg = build_config(args.threads)
 
     cleaned_dir = PROJECT_ROOT / "data/cleaned_dataset"
-    diamond_dir = diamond_directory
+    diamond_dir = args.output_dir
 
     train_dataset = args.train_dataset
     val_dataset = args.val_dataset
     test_dataset = args.test_dataset
+    af_test_dataset = args.af_test_dataset
 
     diamond_dir.mkdir(parents=True, exist_ok=True)
 
     train_sequences = read_fasta_as_dict(train_dataset)
     val_sequences = read_fasta_as_dict(val_dataset)
     test_sequences = read_fasta_as_dict(test_dataset)
+    af_test_sequences = read_fasta_as_dict(af_test_dataset)
 
     # Extract split IDs from the FASTA headers while preserving dataset order.
     train_ids = [protein["full_id"] for protein in get_protein_info(train_dataset)]
     val_ids = [protein["full_id"] for protein in get_protein_info(val_dataset)]
     test_ids = [protein["full_id"] for protein in get_protein_info(test_dataset)]
+    af_test_ids = [protein["full_id"] for protein in get_protein_info(af_test_dataset)]
 
     # Write split-specific FASTA files used by DIAMOND.
     # The training FASTA is used both as the database source and as training queries.
@@ -143,6 +152,8 @@ def main() -> None:
         test_sequences,
         diamond_dir / "test_queries.fasta",
     )
+
+    af_test_fasta = write_fasta_from_ids(af_test_ids, af_test_sequences, diamond_dir / "af_test_queries.fasta")
 
     db_prefix = diamond_dir / "train_db"
 
@@ -173,6 +184,7 @@ def main() -> None:
         force=args.force,
     )
 
+    maybe_run_search(af_test_fasta, db_prefix, diamond_dir / "af_test_hits.tsv", cfg, force=args.force)
     logger.info("DIAMOND preparation complete.")
 
 

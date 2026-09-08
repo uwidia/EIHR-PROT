@@ -15,6 +15,8 @@ from models.sequence_homology_ablation import (
     build_sequence_homology_confidence_gate_model,
     build_sequence_homology_internal_gate_model,
 )
+from models.identity_fusion_data import IdentitySequenceHomologyShardDataset, make_identity_sequence_homology_collate_fn
+from models.sequence_homology_fusion_baselines import build_sequence_homology_fixed_fusion_model, build_sequence_homology_identity_fusion_model
 from models.sequence_homology_common import (
     SequenceHomologyShardDataset,
     make_sequence_homology_collate_fn,
@@ -37,6 +39,8 @@ SPECS = {
         collate_factory=make_sequence_homology_collate_fn,
         model_builder=build_sequence_homology_confidence_gate_model,
     ),
+    "sequence_homology_fixed_fusion": InferenceSpec(ablation="sequence_homology_fixed_fusion", dataset_kind="sequence_homology", dataset_cls=SequenceHomologyShardDataset, collate_factory=make_sequence_homology_collate_fn, model_builder=build_sequence_homology_fixed_fusion_model),
+    "sequence_homology_identity_fusion": InferenceSpec(ablation="sequence_homology_identity_fusion", dataset_kind="identity_sequence_homology", dataset_cls=IdentitySequenceHomologyShardDataset, collate_factory=make_identity_sequence_homology_collate_fn, model_builder=build_sequence_homology_identity_fusion_model),
 }
 
 GATE_SPECS = {

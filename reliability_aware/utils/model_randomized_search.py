@@ -1,6 +1,8 @@
 from __future__ import annotations
 import random
 from pathlib import Path
+import json
+import random
 
 from models.sequence_only_ablation import run_one_batch_smoke_test_sequence_only
 
@@ -8,8 +10,8 @@ from reliability_aware.utils.losses import compute_pos_weight_from_label_indices
 from reliability_aware.utils.model_training import build_record, save_and_track_best
 
 
-def _sample_hparams(search_space) -> dict:
-    return {k: random.choice(v) for k, v in search_space.items()}
+def _sample_hparams(search_space, rng=random) -> dict:
+    return {k: rng.choice(v) for k, v in search_space.items()}
 
 
 # Sequence Only Ablation
@@ -51,11 +53,12 @@ def run_randomized_search(
     base_dir.mkdir(parents=True, exist_ok=True)
 
     records = []
+    search_rng = random.Random(42)
     best_score = -1.0
     best_record = None
 
     for trial in range(num_trials):
-        sample_hparams = _sample_hparams(search_space)
+        sample_hparams = _sample_hparams(search_space, search_rng)
         print(f"\n{'='*60}")
         print(f"[Search] Trial {trial+1}/{num_trials}  hparams={sample_hparams}")
         print(f"{'='*60}")
@@ -70,7 +73,7 @@ def run_randomized_search(
         model, optimizer = build_model_fn(sample_hparams, go_terms, device)
 
         # Smoke test on the very first trial only
-        if smoke_test and trial == 0:
+        if smoke_test and smoke_test_fn is not None and trial == 0:
             print("Running smoke test on trial 0...")
             smoke_test_fn(
                 model=model,
@@ -125,6 +128,8 @@ def run_randomized_search(
             best_save_path=base_dir / "best_meta.pt",
         )
 
+    records.sort(key=lambda record: record["score"], reverse=True)
+    (base_dir / "search_results.json").write_text(json.dumps(records, indent=2))
     print(f"\n[Search complete] Best trial score: {best_score:.4f}")
     print(f"Best 5 hparams: {[record['hparams'] for record in records[:top_k_params]]}")
 
