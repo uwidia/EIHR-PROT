@@ -28,7 +28,7 @@ def file_exists(path: Path) -> bool:
     return path.exists() and path.stat().st_size > 0
 
 
-def build_config(threads: int) -> DiamondSearchConfig:
+def build_config(threads: int, *, iterate: bool = True) -> DiamondSearchConfig:
     """Keep DIAMOND search settings in one place."""
     return DiamondSearchConfig(
         evalue_max=1e-5,
@@ -36,7 +36,7 @@ def build_config(threads: int) -> DiamondSearchConfig:
         max_target_seqs=50,
         top_k=10,
         sensitivity="sensitive",
-        iterate=True,
+        iterate=iterate,
         threads=threads,
     )
 
@@ -91,6 +91,11 @@ def main() -> None:
         help="Number of CPU threads to pass to DIAMOND.",
     )
     parser.add_argument(
+        "--no-iterate",
+        action="store_true",
+        help="Disable iterative search. Use a new output directory and compare retained evidence before reusing priors.",
+    )
+    parser.add_argument(
         "--train_dataset",
         type=Path,
         default=PROJECT_ROOT / "data/cleaned_dataset" / "cleaned_pdb_train.fasta",
@@ -112,7 +117,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    cfg = build_config(args.threads)
+    cfg = build_config(args.threads, iterate=not args.no_iterate)
 
     cleaned_dir = PROJECT_ROOT / "data/cleaned_dataset"
     diamond_dir = args.output_dir
