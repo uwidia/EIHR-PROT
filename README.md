@@ -362,6 +362,31 @@ diamond_db/{BP,MF,CC}/
 
 The GO vocabulary is built from training annotations only. Training homology priors exclude self-hits, while validation and test priors search only against the training database.
 
+**Original homology and identity fusion use separate preparation paths:**
+
+| Workflow | Commands | Inputs and outputs | Validation proteins |
+| --- | --- | --- | --- |
+| Original homology | `prepare_diamond_hits.py`, then `build_homology_shards.py` | Nine-column `diamond_db/*_hits.tsv` → `diamond_db/{BP,MF,CC}/*_homology_shards/` | Keep all proteins, including `2VAU-A` and `5LSQ-A` |
+| Identity fusion | `fusion_baselines.py enrich` (only if enriched hits are missing), then `fusion_baselines.py prepare` | Exact-count hits configured under `diamond_db/nident/` → filtered evidence and identity sidecars under `runs/fusion_resources/validation_exclude_two_v1/` | Exclude whole queries `2VAU-A` and `5LSQ-A` before identity validation |
+
+`build_homology_shards.py` converts existing hits into priors; it does not run a DIAMOND search. Its bitscore×coverage priors do not use `nident`. It also accepts existing ten-column hit files, ignoring the tenth column without dropping proteins or changing retention. An invalid identity count such as `nident=99, slen=66` therefore does not block original shard building. You can rerun the failed commands directly:
+
+```bash
+for aspect in BP MF CC; do
+  uv run --extra "$EXTRA" python scripts/build_homology_shards.py --go_aspect "$aspect" --splits val
+done
+```
+
+Existing completed shards are skipped; add `--force` only when you intend to rebuild them. No hit regeneration is needed to resolve this original-workflow error.
+
+For identity fusion, reuse the enriched paths in `configs/fusion_baseline_resources.yaml` (validation currently uses `diamond_db/nident/val_hits_rebuilt.tsv`) and run:
+
+```bash
+uv run --extra "$EXTRA" python scripts/fusion_baselines.py prepare
+```
+
+This validates the remaining exact counts and checks retained evidence against the original hits. The fusion models reuse original homology shards with the reduced validation loader; baseline-local reconstruction also excludes these queries' evidence while preserving manifest indices. The same reduced validation cohort applies to the new fixed-fusion comparison baseline. See [the fusion preparation guide](baseline_reference.md#2-validate-evidence-and-build-identity-resources) for explicit enrichment and optional `build-missing-homology` commands. Do not use the standalone `build_identity_sidecar.py` on raw validation hits: the protocol-aware `prepare` command performs the required exclusions and evidence audit.
+
 ### 2. Choose a model configuration
 
 | Model | Ablation argument | Configuration |
