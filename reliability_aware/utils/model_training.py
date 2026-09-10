@@ -84,6 +84,14 @@ def run_model_training(
     for run_id, hparams in enumerate(promising_hparams):
         hparams = deepcopy(hparams)
         run_extra = dict(checkpoint_extra or {})
+        if hparams.get("reproducible_training", False):
+            if seed is not None:
+                raise ValueError("Do not combine the fusion seed schedule with reproducible_training")
+            from reliability_aware.utils.reproducibility import configure_training
+            hparams["reproducibility"] = configure_training(
+                hparams["training_seed"], train_loader, val_loader,
+                cpu_threads=hparams.get("cpu_threads"),
+            )
         if seed is not None:
             from reliability_aware.utils.fusion_protocol import seed_run
             hparams['training_seed'] = seed + 10000 + run_id
@@ -104,6 +112,9 @@ def run_model_training(
         )
 
         model, optimizer = build_model_fn(hparams, go_terms, device)
+        if hparams.get("reproducible_training", False):
+            from reliability_aware.utils.reproducibility import seed_training_rng
+            seed_training_rng(hparams["training_seed"], train_loader, val_loader)
 
         history = fit_function(
             model=model,
@@ -443,6 +454,11 @@ def fit_model(
             mode=wandb_mode,
             reinit=True,
         )
+
+    # Logging setup can consume randomness: reset directly before epoch one.
+    if hparams and hparams.get("reproducible_training", False):
+        from reliability_aware.utils.reproducibility import seed_training_rng
+        seed_training_rng(hparams["training_seed"], train_loader, val_loader)
 
     for epoch in range(1, num_epochs + 1):
         print(f"Currently running epoch {epoch}:")

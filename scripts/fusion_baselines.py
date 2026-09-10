@@ -42,25 +42,53 @@ def manifest_coverage(item):
 
 
 def check_resources(resources):
+    """Report missing prerequisites and generated artifacts without building them."""
     from reliability_aware.utils.diamond_homology import read_fasta_as_dict
     report = {'splits': {}, 'missing': []}
+
+    def require(path):
+        path = Path(path)
+        if not path.is_file():
+            report['missing'].append(str(path))
+            return False
+        return True
+
+    require(Path(resources['reference_db']).with_suffix('.dmnd'))
+    for field in ('obo', 'train_annotations'):
+        require(resources[field])
+    for name in ('predict.py', 'alignment_knn.py'):
+        require(Path(resources['reference_source_dir']) / name)
+    for aspect in ASPECTS:
+        for field in ('go_vocab', 'subject_go_index'):
+            require(resources[field].format(aspect=aspect))
     for split in SPLITS:
         item = resources[split]
-        ids = set(read_fasta_as_dict(item['fasta']))
-        report['splits'][split] = {'fasta_n': len(ids), 'validation_excluded': sorted(ids & set(resources['validation_exclude_ids'])) if split == 'pdb_val' else []}
-        try:
-            report['splits'][split]['manifest_n'] = manifest_coverage(item)
-        except (ValueError, FileNotFoundError) as exc:
-            report['missing'].append(str(exc))
+        detail = report['splits'][split] = {}
+        ids = None
+        if require(item['fasta']):
+            ids = set(read_fasta_as_dict(item['fasta']))
+            detail.update(fasta_n=len(ids), validation_excluded=(
+                sorted(ids & set(resources['validation_exclude_ids'])) if split == 'pdb_val' else []))
+        for field in ('original_hits', 'enriched_hits', 'identity'):
+            require(item[field])
+        if require(item['manifest']) and ids is not None:
+            try:
+                detail['manifest_n'] = manifest_coverage(item)
+            except (ValueError, FileNotFoundError) as exc:
+                report['missing'].append(str(exc))
         for aspect in ASPECTS:
             path = Path(item['homology_shards'].format(aspect=aspect))
             if not any(path.glob('homology_shard_*.pt')):
                 report['missing'].append(str(path))
         annotation = item.get('annotations', resources['train_annotations'])
-        # Annotation TSV has a comment preamble; the first field still identifies rows.
-        annotated = {line.split('\t')[0] for line in Path(annotation).read_text().splitlines() if '\t' in line and not line.startswith('#')}
-        report['splits'][split]['annotation_ids_present'] = len(ids & annotated)
-        report['splits'][split]['annotation_ids_absent'] = sorted(ids - annotated)
+        if require(annotation) and ids is not None:
+            # Annotation TSV has a comment preamble.
+            annotated = {line.split('\t')[0] for line in Path(annotation).read_text().splitlines()
+                         if '\t' in line and not line.startswith('#')}
+            detail['annotation_ids_present'] = len(ids & annotated)
+            detail['annotation_ids_absent'] = sorted(ids - annotated)
+    report['missing'] = sorted(set(report['missing']))
+    report['ready'] = not report['missing']
     root = Path(resources['prepared_dir'])
     root.mkdir(parents=True, exist_ok=True)
     (root / 'resource_check.json').write_text(json.dumps(report, indent=2))
@@ -96,6 +124,7 @@ def enrich(resources, split, output, executable, threads):
 
 def build_missing_homology(resources, splits, aspects):
     from reliability_aware.utils.diamond_homology import DiamondSearchConfig, build_aligned_homology_shards
+    from reliability_aware.utils.fusion_preparation import filtered_hits
     for split in splits:
         item = resources[split]
         manifest_coverage(item)
@@ -109,11 +138,41 @@ def build_missing_homology(resources, splits, aspects):
             hits = Path(resources['prepared_dir']) / f'{split}_original_hits.tsv'
             if not hits.exists():
                 raise FileNotFoundError(f'Run prepare for {split} first: {hits}')
+            # Revalidate the working copy so stale/unfiltered files cannot restore
+            # excluded validation evidence after the original parser ignores nident.
+            excluded = set(resources['validation_exclude_ids']) if split == 'pdb_val' else set()
+            filtered_hits(item['original_hits'], hits, excluded, enriched=False)
             build_aligned_homology_shards(manifest_path=item['manifest'], diamond_hits=hits,
                 subject_go_index_json_path=resources['subject_go_index'].format(aspect=aspect),
                 go_vocab_json_path=resources['go_vocab'].format(aspect=aspect), output_dir=output,
                 config=DiamondSearchConfig(), exclude_self_hits=split == 'pdb_train',
                 use_fp16=True, keep_debug_hits=True)
+
+
+def require_training_inputs(resources, config, aspects, *, final, search_dir=None):
+    """Fail before loading large resources or starting any aspect's training."""
+    missing = []
+    for name in ('predict.py', 'alignment_knn.py'):
+        path = Path(resources['reference_source_dir']) / name
+        if not path.is_file():
+            missing.append(str(path))
+    if missing:
+        raise FileNotFoundError(
+            'Set reference_source_dir to the directory directly containing both '
+            'InterLabelGO reference files. Missing: ' + ', '.join(missing))
+    if final:
+        from reliability_aware.utils.fusion_search_reuse import search_results_path
+        for aspect in aspects:
+            selected = search_results_path(config, aspect, search_dir)
+            for path in (selected, selected.parent / 'protocol.json'):
+                if not path.is_file():
+                    missing.append(str(path))
+        if missing:
+            raise FileNotFoundError(
+                'Final training requires completed searches for every requested aspect. '
+                'Run search with this configuration first, or pass --search-dir for an '
+                'existing search with equivalent inputs; changing v1/v2 '
+                'paths does not migrate results. Missing: ' + ', '.join(missing))
 
 
 def inference_args(resources, model, dataset, aspect):
@@ -142,11 +201,15 @@ def main(argv=None):
     parser.add_argument('--splits', nargs='+', choices=SPLITS, default=list(SPLITS))
     parser.add_argument('--aspects', nargs='+', choices=ASPECTS, default=list(ASPECTS))
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--search-dir', type=Path, help='Final only: existing search directory containing BP/MF/CC; validate equivalent resources before reuse.')
+    parser.add_argument('--check-only', action='store_true', help='Final only: validate resource compatibility and candidate selection without training.')
     parser.add_argument('--diamond', default='./diamond')
     parser.add_argument('--threads', type=int, default=8)
     parser.add_argument('--n-resamples', type=int, default=10000)
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args(argv)
+    if (args.search_dir is not None or args.check_only) and args.action != 'final':
+        parser.error('--search-dir and --check-only are supported only by final')
     if Path.cwd().resolve() != ROOT:
         parser.error(f'Run from the repository root: {ROOT}')
     from reliability_aware.utils.fusion_protocol import load_resources
@@ -186,11 +249,23 @@ def main(argv=None):
         model_id, path, config = configured_model(args.model)
         if Path(config['resources']).resolve() != args.resources.resolve():
             raise ValueError('The model YAML resources path must match --resources')
-        print(f"Budget: {len(args.aspects)} aspects; {config['num_trials']} search trials x {config['trial_epochs']} epochs; up to {config['top_k_params']} final candidates x {config['final_epochs']} epochs per aspect", flush=True)
+        require_training_inputs(resources, config, args.aspects, final=args.action == 'final', search_dir=args.search_dir)
+        if args.action == 'search':
+            print(f"Search: {len(args.aspects)} aspects; {config['num_trials']} trials x {config['trial_epochs']} epochs per aspect", flush=True)
+        else:
+            source = args.search_dir or config.get('search_results_path') or config['base_dir_search']
+            print(f"Final {'preflight' if args.check_only else 'training'}: {len(args.aspects)} aspects; "
+                  f"up to {config['top_k_params']} candidates from {source}; "
+                  f"{'no training' if args.check_only else str(config['final_epochs']) + ' epochs per candidate'}; no search rerun", flush=True)
+        extra_args = []
+        if args.search_dir is not None:
+            extra_args += ['--search-dir', str(args.search_dir)]
+        if args.check_only:
+            extra_args += ['--check-only']
         for aspect in args.aspects:
             subprocess.run([sys.executable, 'scripts/run_model_training.py', '--ablation', model_id,
                 '--go_aspect', aspect, '--hparams', str(path), '--run_type',
-                'randomized_search' if args.action == 'search' else 'full_training'], check=True)
+                'randomized_search' if args.action == 'search' else 'full_training', *extra_args], check=True)
     elif args.action == 'reference':
         if args.dataset is None:
             parser.error('reference requires --dataset')

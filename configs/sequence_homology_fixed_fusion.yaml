@@ -10,8 +10,8 @@ trial_epochs: 8
 top_k_params: 5
 patience: 10
 final_epochs: 150
-base_dir_search: runs/sequence_homology_fixed_fusion/validation_exclude_two_v1/search
-base_dir_final: runs/sequence_homology_fixed_fusion/validation_exclude_two_v1/final
+base_dir_search: runs/sequence_homology_fixed_fusion/validation_exclude_two_v2/search
+base_dir_final: runs/sequence_homology_fixed_fusion/validation_exclude_two_v2/final
 use_search_results: true
 search_results_path: null
 search_space:

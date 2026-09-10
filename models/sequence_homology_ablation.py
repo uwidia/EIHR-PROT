@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
@@ -15,6 +16,14 @@ from models.sequence_homology_common import (
 from reliability_aware.utils.losses import hierarchy_loss, weighted_bce_on_probs
 
 logger = logging.getLogger(__name__)
+
+CONFIDENCE_GATE_FEATURES = ("b_max", "cov_max", "log1p_n_hits", "has_hit")
+
+
+def confidence_gate_features(omitted_feature=None):
+    if omitted_feature is not None and omitted_feature not in CONFIDENCE_GATE_FEATURES:
+        raise ValueError(f"Unknown omitted gate feature: {omitted_feature!r}")
+    return tuple(name for name in CONFIDENCE_GATE_FEATURES if name != omitted_feature)
 
 
 def initialize_gate_to_balanced(final_layer: nn.Linear) -> None:
@@ -109,8 +118,14 @@ class SequenceHomologyConfidenceGateModel(nn.Module):
         head_dropout: float = 0.2,
         gate_hidden_dim: int = 128,
         gate_dropout: float = 0.2,
+        omitted_gate_feature: str | None = None,
     ):
         super().__init__()
+        self.gate_feature_names = confidence_gate_features(omitted_gate_feature)
+        # Plain attributes preserve the state_dict schema of existing checkpoints.
+        self.gate_feature_indices = tuple(
+            CONFIDENCE_GATE_FEATURES.index(name) for name in self.gate_feature_names
+        )
         self.seq_branch = ESMSequenceBranch(
             esm_dim=1280,
             attn_hidden_dim=attn_hidden_dim,
@@ -124,8 +139,8 @@ class SequenceHomologyConfidenceGateModel(nn.Module):
             dropout=head_dropout,
         )
         self.gate = nn.Sequential(
-            nn.LayerNorm(4),
-            nn.Linear(4, gate_hidden_dim),
+            nn.LayerNorm(len(self.gate_feature_names)),
+            nn.Linear(len(self.gate_feature_names), gate_hidden_dim),
             nn.GELU(),
             nn.Dropout(gate_dropout),
             nn.Linear(gate_hidden_dim, 2),
@@ -163,7 +178,8 @@ class SequenceHomologyConfidenceGateModel(nn.Module):
                 f"got {tuple(gate_features.shape)}"
             )
 
-        gate_weights = self.gate(gate_features)
+        # Slice before normalization; stored features and priors stay intact.
+        gate_weights = self.gate(gate_features[:, self.gate_feature_indices])
         alpha_n = gate_weights[:, 0].unsqueeze(-1)
         alpha_h = gate_weights[:, 1].unsqueeze(-1)
         fused_probs = alpha_n * neural_probs + alpha_h * homology_scores
@@ -240,12 +256,24 @@ def build_sequence_homology_internal_gate_model(sample_hparams, go_terms, device
 
 def build_sequence_homology_confidence_gate_model(sample_hparams, go_terms, device):
     dropout = float(sample_hparams.get("dropout", 0.2))
-    model = SequenceHomologyConfidenceGateModel(
-        num_go_terms=len(go_terms),
-        **_sequence_homology_model_kwargs(sample_hparams),
-        gate_hidden_dim=int(sample_hparams.get("gate_hidden_dim", 128)),
-        gate_dropout=float(sample_hparams.get("gate_dropout", dropout)),
-    ).to(device)
+    from reliability_aware.utils.initialization import resolve_initialization_seed
+
+    seed = resolve_initialization_seed(sample_hparams.get("initialization_seed"))
+    if seed is not None:
+        # Persist the realized seed, including when the request was "random".
+        sample_hparams["initialization_seed"] = seed
+    # Construction is on CPU. Preserve the surrounding training RNG stream.
+    with torch.random.fork_rng(devices=[]) if seed is not None else nullcontext():
+        if seed is not None:
+            torch.random.default_generator.manual_seed(seed)
+        model = SequenceHomologyConfidenceGateModel(
+            num_go_terms=len(go_terms),
+            **_sequence_homology_model_kwargs(sample_hparams),
+            gate_hidden_dim=int(sample_hparams.get("gate_hidden_dim", 128)),
+            gate_dropout=float(sample_hparams.get("gate_dropout", dropout)),
+            omitted_gate_feature=sample_hparams.get("omitted_gate_feature"),
+        )
+    model = model.to(device)
     return model, _build_optimizer(model, sample_hparams, use_gate_lr=True)
 
 

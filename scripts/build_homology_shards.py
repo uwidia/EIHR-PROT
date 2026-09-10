@@ -1,5 +1,9 @@
 """
-Build GO-aspect-specific homology shards from shared DIAMOND hits.
+Build original GO-aspect-specific homology shards from diamond_db/*_hits.tsv.
+
+Uses bitscore/coverage and the full ESM manifest, ignoring optional nident.
+Identity-fusion enrichment and validation exclusions are handled separately
+by scripts/fusion_baselines.py; this command never reads diamond_db/nident/.
 
 Run once per GO aspect:
 

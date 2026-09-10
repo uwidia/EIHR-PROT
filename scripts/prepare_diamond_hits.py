@@ -1,3 +1,5 @@
+"""Generate original nine-column hits; use fusion_baselines.py enrich for nident."""
+
 import argparse
 import logging
 from pathlib import Path
@@ -78,7 +80,7 @@ def maybe_run_search(
 def main() -> None:
     setup_logging()
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--force",
         action="store_true",
@@ -108,7 +110,7 @@ def main() -> None:
         help="Path to the validation FASTA used to generate validation search queries.",
     )
     parser.add_argument("--af_test_dataset", type=Path, default=PROJECT_ROOT / "data/cleaned_dataset" / "cleaned_af_test.fasta", help="AF test FASTA; queried against the PDB-training DB only.")
-    parser.add_argument("--output_dir", type=Path, default=diamond_directory, help="Dataset-qualified output directory; do not overwrite legacy raw hits.")
+    parser.add_argument("--output_dir", type=Path, default=diamond_directory, help="Original nine-column hit directory (default: diamond_db). For enriched hits use fusion_baselines.py enrich.")
     parser.add_argument(
         "--test_dataset",
         type=Path,

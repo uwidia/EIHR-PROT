@@ -5,43 +5,45 @@ obo: data/HEAL_dataset/go-basic.obo
 train_annotations: data/HEAL_dataset/nrPDB-GO_2019.06.18_annot.tsv
 go_vocab: diamond_db/{aspect}/go_vocab.json
 subject_go_index: diamond_db/{aspect}/subject_go_index.json
-prepared_dir: runs/fusion_resources/validation_exclude_two_v1
-evaluation_dir: runs/test_evaluation/fusion_validation_exclude_two_v1
-comparison_dir: runs/fusion_comparisons/validation_exclude_two_v1
-reference_source_dir: ../InterLabelGO-main/InterLabelGO-main
+prepared_dir: runs/fusion_resources/validation_exclude_two_v2
+evaluation_dir: runs/test_evaluation/fusion_validation_exclude_two_v2
+comparison_dir: runs/fusion_comparisons/validation_exclude_two_v2
+# Directory containing predict.py and alignment_knn.py.
+reference_source_dir: ../InterLabelGO-main
 pdb_train:
   fasta: data/cleaned_dataset/cleaned_pdb_train.fasta
   manifest: esm_embeddings/train/train_manifest.csv
   esm_shards: esm_embeddings/train
   homology_shards: diamond_db/{aspect}/train_homology_shards
   original_hits: diamond_db/train_hits.tsv
-  enriched_hits: diamond_db/nident/train_hits.tsv
-  identity: runs/fusion_resources/validation_exclude_two_v1/pdb_train_identity.json
+  enriched_hits: runs/fusion_resources/enrichment/pdb_train_hits.tsv
+  identity: runs/fusion_resources/validation_exclude_two_v2/pdb_train_identity.json
 pdb_val:
   fasta: data/cleaned_dataset/cleaned_pdb_val.fasta
   manifest: esm_embeddings/val/val_manifest.csv
   esm_shards: esm_embeddings/val
   homology_shards: diamond_db/{aspect}/val_homology_shards
   original_hits: diamond_db/val_hits.tsv
-  enriched_hits: diamond_db/nident/val_hits_rebuilt.tsv
-  identity: runs/fusion_resources/validation_exclude_two_v1/pdb_val_identity.json
+  enriched_hits: runs/fusion_resources/enrichment/pdb_val_hits.tsv
+  identity: runs/fusion_resources/validation_exclude_two_v2/pdb_val_identity.json
 pdb_test:
   fasta: data/cleaned_dataset/cleaned_pdb_test.fasta
   manifest: esm_embeddings/test/test_manifest.csv
   esm_shards: esm_embeddings/test
   homology_shards: diamond_db/{aspect}/test_homology_shards
   original_hits: diamond_db/test_hits.tsv
-  enriched_hits: diamond_db/nident/test_hits.tsv
-  identity: runs/fusion_resources/validation_exclude_two_v1/pdb_test_identity.json
+  enriched_hits: runs/fusion_resources/enrichment/pdb_test_hits.tsv
+  identity: runs/fusion_resources/validation_exclude_two_v2/pdb_test_identity.json
   annotations: data/HEAL_dataset/nrPDB-GO_2019.06.18_annot.tsv
 af_test:
   fasta: data/cleaned_dataset/cleaned_af_test.fasta
   manifest: esm_embeddings/af_test/af_test_manifest.csv
   esm_shards: esm_embeddings/af_test
   homology_shards: runs/fusion_resources/af_test/{aspect}/homology_shards
-  original_hits: diamond_db/nident/af_test_hits.tsv
-  enriched_hits: diamond_db/nident/af_test_hits.tsv
-  identity: runs/fusion_resources/validation_exclude_two_v1/af_test_identity.json
+  # AF uses the same enriched file as reference evidence.
+  original_hits: runs/fusion_resources/enrichment/af_test_hits.tsv
+  enriched_hits: runs/fusion_resources/enrichment/af_test_hits.tsv
+  identity: runs/fusion_resources/validation_exclude_two_v2/af_test_identity.json
   annotations: data/HEAL_dataset/merged_GO_annot.tsv
 # Fill in the existing confidence-gate checkpoints only if new reference inference is needed.
 reference_checkpoints: {BP: null, MF: null, CC: null}

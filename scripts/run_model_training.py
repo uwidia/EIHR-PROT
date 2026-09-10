@@ -45,6 +45,8 @@ def parse_args():
         required=True,
         choices=["randomized_search", "full_training", "evaluate_only"],
     )
+    parser.add_argument("--search-dir", type=Path, help="Existing fusion search directory containing aspect subdirectories.")
+    parser.add_argument("--check-only", action="store_true", help="Validate fusion final-training inputs and candidates without training.")
     return parser.parse_args()
 
 
@@ -56,6 +58,9 @@ def main():
 
     ablation = args.ablation.lower()
     run_type = args.run_type.lower()
+    if (args.search_dir is not None or args.check_only) and (
+            run_type != "full_training" or ablation not in {"sequence_homology_fixed_fusion", "sequence_homology_identity_fusion"}):
+        raise ValueError("--search-dir and --check-only require fusion full_training")
 
     if ablation == "homology_only" and run_type != "evaluate_only":
         raise ValueError(
@@ -66,6 +71,16 @@ def main():
             "evaluate_only is currently supported only for homology_only. "
             "Use randomized_search or full_training for trainable models."
         )
+
+    # Apply process settings before torch/numpy imports or CUDA initialization.
+    selected_hparams = hparams.get("promising_hparams", {}).get(args.go_aspect.upper(), {})
+    if selected_hparams.get("reproducible_training", False):
+        if ablation != "sequence_homology_confidence_gate" or run_type != "full_training" or hparams.get("use_search_results", False):
+            raise ValueError("reproducible_training requires confidence-gate full_training with fixed promising_hparams")
+        from reliability_aware.utils.reproducibility import prepare_training_process, configure_training, resolve_cpu_threads
+        selected_hparams["cpu_threads"] = resolve_cpu_threads(selected_hparams.get("cpu_threads"))
+        prepare_training_process(selected_hparams["training_seed"], selected_hparams["cpu_threads"])
+        configure_training(selected_hparams["training_seed"], cpu_threads=selected_hparams["cpu_threads"])
 
     import torch
 
@@ -150,6 +165,7 @@ def main():
     )
 
     baseline_options = {}
+    final_candidates = None
     if is_fusion:
         go_data.val_keep_ids = validation_keep_ids(ablation, go_data.val_keep_ids, resources['validation_exclude_ids'])
         vocab = json.loads(Path(resources['go_vocab'].format(aspect=go_aspect)).read_text())
@@ -169,6 +185,22 @@ def main():
         metadata = protocol_metadata(ablation=ablation, aspect=go_aspect, go_terms=go_data.go_terms,
                                      resources=resources, hparams=hparams,
                                      train_ids=go_data.train_keep_ids, val_ids=go_data.val_keep_ids)
+        if run_type == 'full_training':
+            if not hparams.get('use_search_results', False):
+                raise ValueError('Fusion baselines require use_search_results: true')
+            from reliability_aware.utils.fusion_search_reuse import search_results_path, prepare_final_candidates
+            selected_path = search_results_path(hparams, go_aspect, args.search_dir)
+            final_candidates, source_search = prepare_final_candidates(
+                selected_path, int(hparams['top_k_params']), metadata,
+                allow_relocated=args.search_dir is not None)
+            metadata['source_search'] = source_search
+            report_path = Path(resources['prepared_dir']) / f'{ablation}_{go_aspect}_final_preflight.json'
+            report_path.write_text(json.dumps({'status': 'matched', **source_search}, indent=2, sort_keys=True))
+            logger.info('Final handoff %s: %d candidate(s) from %s; %s',
+                        go_aspect, len(final_candidates), selected_path, source_search['comparison']['mode'])
+            if args.check_only:
+                print(f'{go_aspect}: final preflight matched; {len(final_candidates)} candidate(s); no training started', flush=True)
+                return
         bind_run_directory(Path(hparams['base_dir_search' if run_type == 'randomized_search' else 'base_dir_final']) / go_aspect, metadata)
         baseline_options = {'seed': int(hparams.get('seed', 42)), 'checkpoint_extra': metadata}
         logger.info('Fusion validation excludes %s; %d eligible proteins remain for %s',
@@ -311,7 +343,9 @@ def main():
         )
 
     elif run_type == "full_training":
-        if hparams.get("use_search_results", False):
+        if final_candidates is not None:
+            promising_hparams = final_candidates
+        elif hparams.get("use_search_results", False):
             selected_path = hparams.get("search_results_path") or (Path(hparams["base_dir_search"]) / go_aspect / "search_results.json")
             selected_path = Path(selected_path)
             if not selected_path.exists():

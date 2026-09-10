@@ -205,11 +205,14 @@ def run_diamond_blastp(
     db_prefix: str | Path,
     output_tsv_path: str | Path,
     config: DiamondSearchConfig,
+    *,
+    include_nident: bool = False,
 ) -> Path:
     """
     Run DIAMOND blastp against a prebuilt training database.
 
     Notes:
+    - Original searches emit nine fields; exact nident is opt-in.
     - We ask DIAMOND to emit qcovhsp directly.
     - Filtering by E-value and query coverage is still re-applied downstream
       from the parsed TSV so the branch logic stays explicit and reproducible.
@@ -230,7 +233,7 @@ def run_diamond_blastp(
         str(output_tsv_path),
         "--outfmt",
         "6",
-        *DIAMOND_OUTFMT_FIELDS,
+        *(DIAMOND_OUTFMT_FIELDS if include_nident else LEGACY_DIAMOND_OUTFMT_FIELDS),
         "--evalue",
         f"{config.evalue_max:g}",
         "--max-target-seqs",
@@ -283,7 +286,9 @@ def build_aligned_homology_shards(
       - labels[i]: manifest label
     """
     manifest_rows = _load_manifest_rows(manifest_path)
-    hits_by_query = _parse_diamond_hits(diamond_hits)
+    # Original priors depend on bitscore/coverage, never exact identity counts.
+    # Accept existing ten-column files without letting nident affect this branch.
+    hits_by_query = _parse_diamond_hits(diamond_hits, read_nident=False)
     subject_to_go_indices = _load_subject_go_index(subject_go_index_json_path)
     go_vocab = _load_go_vocab(go_vocab_json_path)
     num_go_terms = len(go_vocab)
@@ -410,11 +415,16 @@ def _load_go_vocab(input_json_path: str | Path) -> list[str]:
     return list(json.loads(input_json_path.read_text()))
 
 
-def _parse_diamond_hits(tsv_path: str | Path) -> dict[str, list[HomologyHit]]:
+def _parse_diamond_hits(
+    tsv_path: str | Path, *, read_nident: bool = True
+) -> dict[str, list[HomologyHit]]:
     """
     Parse DIAMOND TSV output and keep only the best row per (query, subject).
 
     This guards against repeated HSP-like rows for the same subject.
+    Identity consumers validate exact counts by default. Original homology
+    consumers pass read_nident=False to ignore the optional tenth column,
+    preserving all original rows and the original retention policy.
     """
     tsv_path = Path(tsv_path).resolve()
     best_by_pair: dict[tuple[str, str], HomologyHit] = {}
@@ -430,7 +440,7 @@ def _parse_diamond_hits(tsv_path: str | Path) -> dict[str, list[HomologyHit]]:
             context += f" ({row[0]}/{row[1]})"
             try:
                 qlen, slen = int(row[5]), int(row[6])
-                nident = None if len(row) == 9 else int(row[9])
+                nident = int(row[9]) if read_nident and len(row) == 10 else None
             except ValueError as exc:
                 raise ValueError(
                     f"{context}: DIAMOND qlen, slen, and nident must be exact integers; "

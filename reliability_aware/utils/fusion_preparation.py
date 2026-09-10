@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -77,6 +79,8 @@ def prepare_identity_split(*, resources, split):
     original = root / f'{split}_original_hits.tsv'
     enriched = root / f'{split}_hits_with_nident.tsv'
     report_path = root / f'{split}_evidence_report.json'
+    output = Path(item['identity'])
+    reusing_sidecar = output.exists()
     report = {'split': split, 'status': 'failed', 'excluded_query_ids': sorted(excluded),
               'original_query_count': len(queries), 'remaining_query_count': len(kept),
               'query_ids_sha256': canonical_ids_hash(sorted(kept)),
@@ -87,7 +91,8 @@ def prepare_identity_split(*, resources, split):
     try:
         report['removed_original_rows'] = filtered_hits(item['original_hits'], original, excluded, enriched=False)
         report['removed_enriched_rows'] = filtered_hits(item['enriched_hits'], enriched, excluded, enriched=True)
-        old, new = _parse_diamond_hits(original), _parse_diamond_hits(enriched)
+        old = _parse_diamond_hits(original, read_nident=False)
+        new = _parse_diamond_hits(enriched)
         if (set(old) | set(new)) - set(kept):
             raise ValueError('Hits contain query IDs outside the configured FASTA')
         cfg = DiamondSearchConfig(evalue_max=1e-5, min_query_coverage=.30, top_k=10)
@@ -103,17 +108,21 @@ def prepare_identity_split(*, resources, split):
             raise ValueError(f'{len(mismatches)} queries have changed retained evidence; see {report_path}')
         report['status'] = 'matched'
         report['retention'] = {'evalue_max': cfg.evalue_max, 'min_query_coverage': cfg.min_query_coverage, 'top_k': cfg.top_k, 'exclude_self_hits': self_hits}
-        report_path.write_text(json.dumps(report, indent=2, sort_keys=True))
-        output = Path(item['identity'])
+        report_text = json.dumps(report, indent=2, sort_keys=True)
+        # Match text-mode newline serialization on Windows as well as Linux.
+        report_bytes = report_text.replace('\n', os.linesep).encode()
+        report_sha256 = hashlib.sha256(report_bytes).hexdigest()
         # Reuse only a sidecar produced from these exact inputs and this report.
         if output.exists():
             current = json.loads(output.read_text())
             if (current.get('source_hits_sha256') != sha256_file(enriched)
-                    or current.get('evidence_report_sha256') != sha256_file(report_path)):
+                    or current.get('evidence_report_sha256') != report_sha256):
                 raise ValueError(f'Stale sidecar: {output}; use a new prepared directory')
+            report_path.write_bytes(report_bytes)
             from models.identity_fusion_data import load_identity_sidecar
             load_identity_sidecar(output)
         else:
+            report_path.write_bytes(report_bytes)
             output.parent.mkdir(parents=True, exist_ok=True)
             payload = build_identity_sidecar(query_ids=kept, hits_tsv=enriched, output_path=output,
                                              config=cfg, exclude_self_hits=self_hits)
@@ -128,7 +137,8 @@ def prepare_identity_split(*, resources, split):
     except Exception as exc:
         report['status'] = 'failed'
         report['error'] = str(exc)
-        report_path.write_text(json.dumps(report, indent=2, sort_keys=True))
+        failure_path = root / f'{split}_preparation_failure.json' if reusing_sidecar else report_path
+        failure_path.write_text(json.dumps(report, indent=2, sort_keys=True))
         raise
     return report
 
@@ -146,7 +156,7 @@ def verify_frozen_priors(resources, split, aspect):
     source = Path(resources['prepared_dir']) / f'{split}_original_hits.tsv'
     excluded = set(resources['validation_exclude_ids']) if split == 'pdb_val' else set()
     filtered_hits(item['original_hits'], source, excluded, enriched=False)
-    hits = _parse_diamond_hits(source)
+    hits = _parse_diamond_hits(source, read_nident=False)
     vocab = Path(resources['go_vocab'].format(aspect=aspect))
     index_path = Path(resources['subject_go_index'].format(aspect=aspect))
     index = _load_subject_go_index(index_path)

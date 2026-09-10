@@ -34,7 +34,7 @@ def compute_diamond_score_probabilities(
     where retained hits s are DIAMOND hits after the repository's filtering policy.
     """
     config = search_config or DiamondSearchConfig()
-    hits_by_query = _parse_diamond_hits(diamond_hits_path)
+    hits_by_query = _parse_diamond_hits(diamond_hits_path, read_nident=False)
     subject_to_indices = _load_subject_go_index(subject_go_index_path)
 
     num_go_terms = len(go_terms)
