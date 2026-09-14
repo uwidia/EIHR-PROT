@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 
 from reliability_aware.utils.prediction_cache import sha256_file
+from reliability_aware.utils.fusion_protocol import normalize_protocol, policy_fingerprint
 
 _LOCATION_CONFIG_KEYS = {
     'base_dir_search', 'base_dir_final', 'search_results_path', 'resources',
@@ -49,7 +50,11 @@ def _equivalent_identity(saved, current):
     new = json.loads(new_path.read_text())
     if not old.get('evidence_report') or not new.get('evidence_report'):
         raise ValueError('Search reuse requires audited identity sidecars')
-    strip = lambda value: {k: v for k, v in value.items() if k not in _IDENTITY_PROVENANCE_KEYS}
+    def strip(value):
+        normalized = {k: v for k, v in value.items()
+                      if k not in _IDENTITY_PROVENANCE_KEYS and k != 'excluded_query_ids'}
+        normalized['validation_policy_sha256'] = policy_fingerprint(value)
+        return normalized
     if strip(old) != strip(new):
         raise ValueError('Identity records, retained-hit evidence, or policy changed since search')
     return {
@@ -73,6 +78,7 @@ def _equivalent_homology(saved, current):
 
 
 def validate_relocated_protocol(saved, current):
+    saved, current = normalize_protocol(saved), normalize_protocol(current)
     blocks = {'configuration', 'resources', 'reference_source_hashes'}
     if {k: v for k, v in saved.items() if k not in blocks} != {
             k: v for k, v in current.items() if k not in blocks}:
@@ -115,7 +121,7 @@ def prepare_final_candidates(path, count, metadata, *, allow_relocated=False):
     saved = json.loads(protocol.read_text())
     current = json.loads(json.dumps(metadata))
     comparison = {'mode': 'exact_protocol_match'}
-    if saved != current:
+    if normalize_protocol(saved) != normalize_protocol(current):
         if not allow_relocated:
             raise ValueError('Search results use a different cohort, resources, model, or configuration. '
                              'For equivalent relocated resources, use final --search-dir with the original search directory.')

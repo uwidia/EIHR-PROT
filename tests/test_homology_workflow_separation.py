@@ -16,9 +16,15 @@ from reliability_aware.utils.fusion_preparation import prepare_identity_split, v
 from scripts.fusion_baselines import build_missing_homology
 
 
+from reliability_aware.utils.fusion_protocol import VALIDATION_EXCLUSIONS
+from reliability_aware.utils.prediction_cache import canonical_ids_hash
+
+QUERY_A, QUERY_B = sorted(VALIDATION_EXCLUSIONS)
+
+
 @pytest.fixture
 def resources(tmp_path):
-    labels = ['good', '2VAU-A', 'nohit', '5LSQ-A']
+    labels = ['good', QUERY_A, 'nohit', QUERY_B]
     fasta = tmp_path / 'val.fasta'
     fasta.write_text(''.join(f'>{q}\n' + 'A' * 331 + '\n' for q in labels))
     manifest = tmp_path / 'manifest.csv'
@@ -29,8 +35,8 @@ def resources(tmp_path):
     original = tmp_path / 'original.tsv'
     original.write_text(
         'good\t1XX8-A\t1e-9\t100\t50\t331\t66\t50\t50\t25\n'
-        '2VAU-A\t1XX8-A\t1.25e-33\t125\t98.2\t331\t66\t354\t28.0\t99\n'
-        '5LSQ-A\t1XX8-A\t1e-9\t100\t80\t331\t66\t99\t100\t71\n')
+        f'{QUERY_A}\t1XX8-A\t1.25e-33\t125\t98.2\t331\t66\t354\t28.0\t99\n'
+        f'{QUERY_B}\t1XX8-A\t1e-9\t100\t80\t331\t66\t99\t100\t71\n')
     enriched = tmp_path / 'enriched.tsv'
     enriched.write_bytes(original.read_bytes())
     vocab, index = tmp_path / 'vocab.json', tmp_path / 'index.json'
@@ -39,7 +45,7 @@ def resources(tmp_path):
     esm = tmp_path / 'esm'
     esm.mkdir()
     (esm / 'part_0000.pt').touch()
-    return {'prepared_dir': str(tmp_path / 'prepared'), 'validation_exclude_ids': ['2VAU-A', '5LSQ-A'],
+    return {'prepared_dir': str(tmp_path / 'prepared'), 'validation_exclude_ids': [QUERY_A, QUERY_B],
             'go_vocab': str(vocab), 'subject_go_index': str(index),
             'pdb_val': {'fasta': str(fasta), 'manifest': str(manifest), 'esm_shards': str(esm),
                         'original_hits': str(original), 'enriched_hits': str(enriched),
@@ -62,7 +68,7 @@ def test_original_shards_preserve_full_cohort_and_nine_column_values(resources, 
     legacy = tmp_path / 'legacy.tsv'
     legacy.write_text(''.join('\t'.join(row.split('\t')[:9]) + '\n' for row in enriched_original.read_text().splitlines()))
     expected = build_original(resources, tmp_path / 'legacy_shards', legacy)
-    assert actual['labels'] == ['good', '2VAU-A', 'nohit', '5LSQ-A']
+    assert actual['labels'] == ['good', QUERY_A, 'nohit', QUERY_B]
     for key in ('priors', 'gate_features'):
         assert all(torch.equal(a, b) for a, b in zip(actual[key], expected[key]))
     assert actual['debug_hits'] == expected['debug_hits']
@@ -79,10 +85,10 @@ def test_fusion_local_shards_exclude_evidence_without_reindexing(resources):
     item = resources['pdb_val']
     before = Path(item['enriched_hits']).read_bytes()
     report = prepare_identity_split(resources=resources, split='pdb_val')
-    assert report['excluded_query_ids'] == ['2VAU-A', '5LSQ-A']
+    assert report['validation_policy_sha256'] == canonical_ids_hash(sorted(VALIDATION_EXCLUSIONS))
     build_missing_homology(resources, ['pdb_val'], ['BP'])
     shard = torch.load(Path(item['homology_shards']) / 'homology_shard_0000.pt', weights_only=False)
-    assert shard['labels'] == ['good', '2VAU-A', 'nohit', '5LSQ-A']
+    assert shard['labels'] == ['good', QUERY_A, 'nohit', QUERY_B]
     assert [s['n_hits'] for s in shard['stats']] == [1, 0, 0, 0]
     records = json.loads(Path(item['identity']).read_text())['records']
     assert [r['protein_id'] for r in records] == ['good', 'nohit']
@@ -100,8 +106,8 @@ def test_fusion_rejects_stale_unfiltered_working_copy(resources):
 @pytest.mark.parametrize('count', ['99', '99.0', 'unavailable'])
 def test_original_ignores_identity_column_but_identity_stays_strict(tmp_path, count):
     hits = tmp_path / 'hits.tsv'
-    hits.write_text(f'2VAU-A\t1XX8-A\t1e-9\t100\t98.2\t331\t66\t354\t28\t{count}\n')
-    assert _parse_diamond_hits(hits, read_nident=False)['2VAU-A'][0].nident is None
+    hits.write_text(f'{QUERY_A}\t1XX8-A\t1e-9\t100\t98.2\t331\t66\t354\t28\t{count}\n')
+    assert _parse_diamond_hits(hits, read_nident=False)[QUERY_A][0].nident is None
     with pytest.raises(ValueError):
         _parse_diamond_hits(hits)
 
@@ -125,7 +131,7 @@ def test_enrichment_entry_point_keeps_exact_count_schema(tmp_path):
     db.with_suffix('.dmnd').write_bytes(b'test database')
     output = tmp_path / 'nident' / 'val_hits.tsv'
     resources = {'reference_db': str(db), 'pdb_val': {'fasta': str(query)}}
-    with patch('scripts.fusion_baselines.subprocess.check_output', return_value='DIAMOND test'), \
+    with patch('scripts.fusion_baselines.subprocess.check_output', return_value='DIAMOND test'),\
          patch('scripts.fusion_baselines.subprocess.run', side_effect=lambda *a, **kw: output.write_text('q\ts\t1e-9\t100\t100\t3\t3\t3\t100\t3\n')) as run:
         enrich(resources, 'pdb_val', output, './diamond', 2)
     command = run.call_args.args[0]

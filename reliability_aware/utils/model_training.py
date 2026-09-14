@@ -177,7 +177,7 @@ def run_model_training(
         if checkpoint_extra is not None:
             selected = torch.load(canonical, map_location='cpu', weights_only=False)
             summary.update({k: selected[k] for k in ('epoch', 'fusion_parameters', 'model_type', 'go_aspect',
-                           'go_terms', 'go_terms_sha256', 'validation_exclude_ids', 'resources', 'adaptation',
+                           'go_terms', 'go_terms_sha256', 'validation_policy_sha256', 'resources', 'adaptation',
                            'fusion_protocol_version', 'training_seed', 'search_seed') if k in selected})
         (base_dir / "best_model_metadata.json").write_text(__import__("json").dumps(summary, indent=2))
         print(f"Best run hparams: {best_run['hparams']}")

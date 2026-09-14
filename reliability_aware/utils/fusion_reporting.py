@@ -10,6 +10,8 @@ from openpyxl import Workbook
 from reliability_aware.utils.bootstrap import PreparedCafaEvaluator, ResamplingPlan, percentile_interval
 from reliability_aware.utils.bootstrap_reporting import _sheet
 from reliability_aware.utils.prediction_cache import align_caches, read_prediction_cache, sha256_file
+from reliability_aware.utils.prediction_cache import canonical_ids_hash
+from reliability_aware.utils.fusion_protocol import VALIDATION_EXCLUSIONS, policy_fingerprint
 
 METRICS = ('Fmax', 'AUPR', 'Smin')
 
@@ -101,7 +103,7 @@ def compare_all(resources, *, n_resamples=10000, seed=42):
                     full, baseline = read_prediction_cache(Path(reference)), read_prediction_cache(comparator)
                     if full.metadata.get('model_id') != 'sequence_homology_confidence_gate' or baseline.metadata.get('model_id') != model_id:
                         raise ValueError('Cache model ID mismatch')
-                    if baseline.metadata.get('validation_exclude_ids') != ['2VAU-A', '5LSQ-A']:
+                    if policy_fingerprint(baseline.metadata) != canonical_ids_hash(sorted(VALIDATION_EXCLUSIONS)):
                         raise ValueError('Baseline cache uses a different validation cohort')
                     pair, reps = compare_pair(full, baseline, dataset=dataset, aspect=aspect,
                             obo=resources['obo'], output_dir=output / 'plans', n_resamples=n_resamples, seed=seed)

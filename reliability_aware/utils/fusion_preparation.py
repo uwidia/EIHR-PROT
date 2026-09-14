@@ -1,4 +1,4 @@
-"""Audited exclusion and retained-alignment matching, without changing old evidence."""
+"""Prepare and validate retained alignments against original evidence."""
 from __future__ import annotations
 
 import csv
@@ -33,14 +33,13 @@ def alignment_fingerprint(hit):
 
 
 def filtered_hits(source, target, excluded, *, enriched):
-    """Exclude whole queries BEFORE strict parsing; audit every removed raw row."""
-    lines, removed, counts = [], [], {}
+    """Apply the query policy before strict alignment parsing."""
+    lines, counts = [], {}
     with Path(source).open(newline='') as handle:
         for number, row in enumerate(csv.reader(handle, delimiter='\t'), 1):
             if not row:
                 continue
             if row[0] in excluded:
-                removed.append({'line': number, 'query_id': row[0], 'fields': row})
                 continue
             if len(row) not in ((10,) if enriched else (9, 10)):
                 raise ValueError(f'{source}: line {number}: expected {10 if enriched else "9 or 10"} fields')
@@ -62,7 +61,6 @@ def filtered_hits(source, target, excluded, *, enriched):
                 raise ValueError(f'{source}: line {number}: {exc}') from exc
             lines.append('\t'.join(row) + '\n')
     write_once(target, ''.join(lines))
-    return removed
 
 
 def prepare_identity_split(*, resources, split):
@@ -72,7 +70,7 @@ def prepare_identity_split(*, resources, split):
     excluded = set(resources['validation_exclude_ids']) if split == 'pdb_val' else set()
     queries = read_fasta_as_dict(item['fasta'])
     if excluded - set(queries):
-        raise ValueError(f'Validation exclusion IDs absent from FASTA: {sorted(excluded - set(queries))}')
+        raise ValueError('Validation FASTA does not match the configured cohort policy')
     kept = [q for q in queries if q not in excluded]
     write_once(root / f'{split}.ids.txt', ''.join(q + '\n' for q in kept))
     write_once(root / f'{split}.fasta', ''.join(f'>{q}\n{queries[q]}\n' for q in kept))
@@ -81,16 +79,16 @@ def prepare_identity_split(*, resources, split):
     report_path = root / f'{split}_evidence_report.json'
     output = Path(item['identity'])
     reusing_sidecar = output.exists()
-    report = {'split': split, 'status': 'failed', 'excluded_query_ids': sorted(excluded),
-              'original_query_count': len(queries), 'remaining_query_count': len(kept),
+    report = {'split': split, 'status': 'failed', 'validation_policy_sha256': canonical_ids_hash(sorted(excluded)),
+              'query_count': len(kept),
               'query_ids_sha256': canonical_ids_hash(sorted(kept)),
               'source_hashes': {k: {'path': item[k], 'sha256': sha256_file(Path(item[k]))}
                                 for k in ('fasta', 'original_hits', 'enriched_hits')},
               'comparison': 'Exact numeric equality of all nine serialized fields after retention; no tolerance or PID-derived nident',
               'limitation': 'Legacy nine-column evidence has no alignment coordinates; matching validates available fields, not a unique alignment path.'}
     try:
-        report['removed_original_rows'] = filtered_hits(item['original_hits'], original, excluded, enriched=False)
-        report['removed_enriched_rows'] = filtered_hits(item['enriched_hits'], enriched, excluded, enriched=True)
+        filtered_hits(item['original_hits'], original, excluded, enriched=False)
+        filtered_hits(item['enriched_hits'], enriched, excluded, enriched=True)
         old = _parse_diamond_hits(original, read_nident=False)
         new = _parse_diamond_hits(enriched)
         if (set(old) | set(new)) - set(kept):
@@ -129,7 +127,7 @@ def prepare_identity_split(*, resources, split):
             payload.update({'evidence_report': str(report_path.resolve()),
                             'evidence_report_sha256': sha256_file(report_path),
                             'query_ids_sha256': canonical_ids_hash(sorted(kept)),
-                            'excluded_query_ids': sorted(excluded), 'dataset_split': split,
+                            'validation_policy_sha256': canonical_ids_hash(sorted(excluded)), 'dataset_split': split,
                             'retention': report['retention'],
                             'schema_fields': DIAMOND_OUTFMT_FIELDS,
                             'audit_sha256': sha256_file(Path(payload['audit_path']))})
@@ -186,7 +184,7 @@ def verify_frozen_priors(resources, split, aspect):
     if seen != set(expected):
         raise ValueError(f'{directory}: incomplete manifest coverage')
     report = {'status': 'matched', 'split': split, 'aspect': aspect, 'checked_n': len(seen),
-              'excluded_query_ids': sorted(excluded),
+              'validation_policy_sha256': canonical_ids_hash(sorted(excluded)),
               'sources': {k: resource_fingerprint(v) for k, v in
                   [('shards', directory), ('manifest', item['manifest']), ('original_hits', item['original_hits']),
                    ('prepared_hits', source), ('vocab', vocab), ('subject_go_index', index_path)]}}

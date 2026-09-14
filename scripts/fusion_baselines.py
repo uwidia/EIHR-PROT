@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Portable, isolated entry point for the fixed and identity fusion study."""
 from __future__ import annotations
 
 import argparse
@@ -15,27 +14,30 @@ if str(ROOT) not in sys.path:
 
 import yaml
 
-SPLITS = ('pdb_train', 'pdb_val', 'pdb_test', 'af_test')
-ASPECTS = ('BP', 'MF', 'CC')
+SPLITS = ("pdb_train", "pdb_val", "pdb_test", "af_test")
+ASPECTS = ("BP", "MF", "CC")
 
 
 def configured_model(model):
-    model_id = f'sequence_homology_{model}_fusion'
-    path = Path('configs') / f'{model_id}.yaml'
+    model_id = f"sequence_homology_{model}_fusion"
+    path = Path("configs") / f"{model_id}.yaml"
     return model_id, path, yaml.safe_load(path.read_text())
 
 
 def manifest_coverage(item):
     from reliability_aware.utils.diamond_homology import read_fasta_as_dict
-    ids = set(read_fasta_as_dict(item['fasta']))
-    with Path(item['manifest']).open(newline='') as handle:
+
+    ids = set(read_fasta_as_dict(item["fasta"]))
+    with Path(item["manifest"]).open(newline="") as handle:
         rows = list(csv.DictReader(handle))
-    labels = [r['label'] for r in rows]
+    labels = [r["label"] for r in rows]
     if len(labels) != len(set(labels)) or set(labels) != ids:
-        raise ValueError(f"Manifest does not cover the complete configured FASTA: {item['manifest']}")
-    shards = {int(r['shard_number']) for r in rows}
+        raise ValueError(
+            f"Manifest does not cover the complete configured FASTA: {item['manifest']}"
+        )
+    shards = {int(r["shard_number"]) for r in rows}
     for shard in shards:
-        path = Path(item['esm_shards']) / f'part_{shard:04d}.pt'
+        path = Path(item["esm_shards"]) / f"part_{shard:04d}.pt"
         if not path.is_file():
             raise FileNotFoundError(path)
     return len(ids)
@@ -44,54 +46,59 @@ def manifest_coverage(item):
 def check_resources(resources):
     """Report missing prerequisites and generated artifacts without building them."""
     from reliability_aware.utils.diamond_homology import read_fasta_as_dict
-    report = {'splits': {}, 'missing': []}
+
+    report = {"splits": {}, "missing": []}
 
     def require(path):
         path = Path(path)
         if not path.is_file():
-            report['missing'].append(str(path))
+            report["missing"].append(str(path))
             return False
         return True
 
-    require(Path(resources['reference_db']).with_suffix('.dmnd'))
-    for field in ('obo', 'train_annotations'):
+    require(Path(resources["reference_db"]).with_suffix(".dmnd"))
+    for field in ("obo", "train_annotations"):
         require(resources[field])
-    for name in ('predict.py', 'alignment_knn.py'):
-        require(Path(resources['reference_source_dir']) / name)
+    for name in ("predict.py", "alignment_knn.py"):
+        require(Path(resources["reference_source_dir"]) / name)
     for aspect in ASPECTS:
-        for field in ('go_vocab', 'subject_go_index'):
+        for field in ("go_vocab", "subject_go_index"):
             require(resources[field].format(aspect=aspect))
     for split in SPLITS:
         item = resources[split]
-        detail = report['splits'][split] = {}
+        detail = report["splits"][split] = {}
         ids = None
-        if require(item['fasta']):
-            ids = set(read_fasta_as_dict(item['fasta']))
-            detail.update(fasta_n=len(ids), validation_excluded=(
-                sorted(ids & set(resources['validation_exclude_ids'])) if split == 'pdb_val' else []))
-        for field in ('original_hits', 'enriched_hits', 'identity'):
+        if require(item["fasta"]):
+            ids = set(read_fasta_as_dict(item["fasta"]))
+            detail["fasta_n"] = len(ids)
+            if split == "pdb_val":
+                ids -= set(resources["validation_exclude_ids"])
+        for field in ("original_hits", "enriched_hits", "identity"):
             require(item[field])
-        if require(item['manifest']) and ids is not None:
+        if require(item["manifest"]) and ids is not None:
             try:
-                detail['manifest_n'] = manifest_coverage(item)
+                detail["manifest_n"] = manifest_coverage(item)
             except (ValueError, FileNotFoundError) as exc:
-                report['missing'].append(str(exc))
+                report["missing"].append(str(exc))
         for aspect in ASPECTS:
-            path = Path(item['homology_shards'].format(aspect=aspect))
-            if not any(path.glob('homology_shard_*.pt')):
-                report['missing'].append(str(path))
-        annotation = item.get('annotations', resources['train_annotations'])
+            path = Path(item["homology_shards"].format(aspect=aspect))
+            if not any(path.glob("homology_shard_*.pt")):
+                report["missing"].append(str(path))
+        annotation = item.get("annotations", resources["train_annotations"])
         if require(annotation) and ids is not None:
             # Annotation TSV has a comment preamble.
-            annotated = {line.split('\t')[0] for line in Path(annotation).read_text().splitlines()
-                         if '\t' in line and not line.startswith('#')}
-            detail['annotation_ids_present'] = len(ids & annotated)
-            detail['annotation_ids_absent'] = sorted(ids - annotated)
-    report['missing'] = sorted(set(report['missing']))
-    report['ready'] = not report['missing']
-    root = Path(resources['prepared_dir'])
+            annotated = {
+                line.split("\t")[0]
+                for line in Path(annotation).read_text().splitlines()
+                if "\t" in line and not line.startswith("#")
+            }
+            detail["annotation_ids_present"] = len(ids & annotated)
+            detail["annotation_ids_absent"] = sorted(ids - annotated)
+    report["missing"] = sorted(set(report["missing"]))
+    report["ready"] = not report["missing"]
+    root = Path(resources["prepared_dir"])
     root.mkdir(parents=True, exist_ok=True)
-    (root / 'resource_check.json').write_text(json.dumps(report, indent=2))
+    (root / "resource_check.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
     return report
 
@@ -99,205 +106,369 @@ def check_resources(resources):
 def enrich(resources, split, output, executable, threads):
     from reliability_aware.utils.diamond_homology import DIAMOND_OUTFMT_FIELDS
     from reliability_aware.utils.prediction_cache import sha256_file
+
     if output is None:
-        raise ValueError('enrich requires --output pointing to a NEW file; then set enriched_hits in the resources YAML')
+        raise ValueError(
+            "enrich requires --output pointing to a NEW file; then set enriched_hits in the resources YAML"
+        )
     output = output.resolve()
     if output.exists():
         raise FileExistsError(output)
-    db = Path(resources['reference_db'])
-    query = Path(resources[split]['fasta'])
+    db = Path(resources["reference_db"])
+    query = Path(resources[split]["fasta"])
     output.parent.mkdir(parents=True, exist_ok=True)
-    command = [executable, 'blastp', '--db', str(db), '--query', str(query), '--out', str(output),
-               '--outfmt', '6', *DIAMOND_OUTFMT_FIELDS, '--evalue', '1e-5', '--max-target-seqs', '50',
-               '--sensitive', '--iterate', '--threads', str(threads)]
-    version = subprocess.check_output([executable, 'version'], text=True).strip()
-    metadata = {'command': command, 'version': version, 'fields': DIAMOND_OUTFMT_FIELDS,
-                'schema': 'eihr-diamond-hits-v2-nident', 'query_sha256': sha256_file(query),
-                'database_sha256': sha256_file(db.with_suffix('.dmnd')), 'status': 'running'}
-    meta = output.with_suffix('.provenance.json')
+    command = [
+        executable,
+        "blastp",
+        "--db",
+        str(db),
+        "--query",
+        str(query),
+        "--out",
+        str(output),
+        "--outfmt",
+        "6",
+        *DIAMOND_OUTFMT_FIELDS,
+        "--evalue",
+        "1e-5",
+        "--max-target-seqs",
+        "50",
+        "--sensitive",
+        "--iterate",
+        "--threads",
+        str(threads),
+    ]
+    version = subprocess.check_output([executable, "version"], text=True).strip()
+    metadata = {
+        "command": command,
+        "version": version,
+        "fields": DIAMOND_OUTFMT_FIELDS,
+        "schema": "eihr-diamond-hits-v2-nident",
+        "query_sha256": sha256_file(query),
+        "database_sha256": sha256_file(db.with_suffix(".dmnd")),
+        "status": "running",
+    }
+    meta = output.with_suffix(".provenance.json")
     meta.write_text(json.dumps(metadata, indent=2))
     subprocess.run(command, check=True)
-    metadata.update({'output_sha256': sha256_file(output), 'status': 'search_complete; retained evidence validation still required'})
+    metadata.update(
+        {
+            "output_sha256": sha256_file(output),
+            "status": "search_complete; retained evidence validation still required",
+        }
+    )
     meta.write_text(json.dumps(metadata, indent=2))
-    print(f'Set {split}.enriched_hits to {output}, then run prepare. Existing priors and DB were not changed.')
+    print(
+        f"Set {split}.enriched_hits to {output}, then run prepare. Existing priors and DB were not changed."
+    )
 
 
 def build_missing_homology(resources, splits, aspects):
-    from reliability_aware.utils.diamond_homology import DiamondSearchConfig, build_aligned_homology_shards
+    from reliability_aware.utils.diamond_homology import (
+        DiamondSearchConfig,
+        build_aligned_homology_shards,
+    )
     from reliability_aware.utils.fusion_preparation import filtered_hits
+
     for split in splits:
         item = resources[split]
         manifest_coverage(item)
         for aspect in aspects:
-            output = Path(item['homology_shards'].format(aspect=aspect)).resolve()
-            if output.is_relative_to((ROOT / 'diamond_db').resolve()):
-                raise ValueError('Missing-resource construction requires a new runs/fusion_resources/... destination in the YAML; original diamond_db is read-only')
+            output = Path(item["homology_shards"].format(aspect=aspect)).resolve()
+            if output.is_relative_to((ROOT / "diamond_db").resolve()):
+                raise ValueError(
+                    "Missing-resource construction requires a new runs/fusion_resources/... destination in the YAML; original diamond_db is read-only"
+                )
             if output.exists() and any(output.iterdir()):
-                raise FileExistsError(f'Refusing to replace existing homology resources: {output}')
-            # The validation copies omit whole excluded queries; original manifest indices remain intact.
-            hits = Path(resources['prepared_dir']) / f'{split}_original_hits.tsv'
+                raise FileExistsError(
+                    f"Refusing to replace existing homology resources: {output}"
+                )
+            # Working copies preserve original manifest indices.
+            hits = Path(resources["prepared_dir"]) / f"{split}_original_hits.tsv"
             if not hits.exists():
-                raise FileNotFoundError(f'Run prepare for {split} first: {hits}')
-            # Revalidate the working copy so stale/unfiltered files cannot restore
-            # excluded validation evidence after the original parser ignores nident.
-            excluded = set(resources['validation_exclude_ids']) if split == 'pdb_val' else set()
-            filtered_hits(item['original_hits'], hits, excluded, enriched=False)
-            build_aligned_homology_shards(manifest_path=item['manifest'], diamond_hits=hits,
-                subject_go_index_json_path=resources['subject_go_index'].format(aspect=aspect),
-                go_vocab_json_path=resources['go_vocab'].format(aspect=aspect), output_dir=output,
-                config=DiamondSearchConfig(), exclude_self_hits=split == 'pdb_train',
-                use_fp16=True, keep_debug_hits=True)
+                raise FileNotFoundError(f"Run prepare for {split} first: {hits}")
+            # Revalidate the working copy before building aligned shards.
+            excluded = (
+                set(resources["validation_exclude_ids"])
+                if split == "pdb_val"
+                else set()
+            )
+            filtered_hits(item["original_hits"], hits, excluded, enriched=False)
+            build_aligned_homology_shards(
+                manifest_path=item["manifest"],
+                diamond_hits=hits,
+                subject_go_index_json_path=resources["subject_go_index"].format(
+                    aspect=aspect
+                ),
+                go_vocab_json_path=resources["go_vocab"].format(aspect=aspect),
+                output_dir=output,
+                config=DiamondSearchConfig(),
+                exclude_self_hits=split == "pdb_train",
+                use_fp16=True,
+                keep_debug_hits=True,
+            )
 
 
 def require_training_inputs(resources, config, aspects, *, final, search_dir=None):
     """Fail before loading large resources or starting any aspect's training."""
     missing = []
-    for name in ('predict.py', 'alignment_knn.py'):
-        path = Path(resources['reference_source_dir']) / name
+    for name in ("predict.py", "alignment_knn.py"):
+        path = Path(resources["reference_source_dir"]) / name
         if not path.is_file():
             missing.append(str(path))
     if missing:
         raise FileNotFoundError(
-            'Set reference_source_dir to the directory directly containing both '
-            'InterLabelGO reference files. Missing: ' + ', '.join(missing))
+            "Set reference_source_dir to the directory directly containing both "
+            "InterLabelGO reference files. Missing: " + ", ".join(missing)
+        )
     if final:
         from reliability_aware.utils.fusion_search_reuse import search_results_path
+
         for aspect in aspects:
             selected = search_results_path(config, aspect, search_dir)
-            for path in (selected, selected.parent / 'protocol.json'):
+            for path in (selected, selected.parent / "protocol.json"):
                 if not path.is_file():
                     missing.append(str(path))
         if missing:
             raise FileNotFoundError(
-                'Final training requires completed searches for every requested aspect. '
-                'Run search with this configuration first, or pass --search-dir for an '
-                'existing search with equivalent inputs; changing v1/v2 '
-                'paths does not migrate results. Missing: ' + ', '.join(missing))
+                "Final training requires completed searches for every requested aspect. "
+                "Run search with this configuration first, or pass --search-dir for an "
+                "existing search with equivalent inputs; changing v1/v2 "
+                "paths does not migrate results. Missing: " + ", ".join(missing)
+            )
 
 
 def inference_args(resources, model, dataset, aspect):
     model_id, _, config = configured_model(model)
     item = resources[dataset]
-    outdir = Path(resources['evaluation_dir']) / model_id / dataset / aspect
-    checkpoint = Path(config['base_dir_final']) / aspect / 'best_model.pt'
-    args = ['--ablation', model_id, '--go_aspect', aspect, '--mode', 'evaluate', '--no-bootstrap',
-            '--dataset_id', dataset, '--checkpoint', str(checkpoint), '--test_fasta', item['fasta'],
-            '--train_fasta', resources['pdb_train']['fasta'], '--test_manifest_path', item['manifest'],
-            '--test_esm_shard_dir', item['esm_shards'], '--test_homology_shard_dir', item['homology_shards'].format(aspect=aspect),
-            '--go_vocab_path', resources['go_vocab'].format(aspect=aspect), '--go_annotation_path', item['annotations'],
-            '--train_go_annotation_path', resources['train_annotations'], '--obo_path', resources['obo'],
-            '--outdir', str(outdir), '--prediction_cache_path', str(outdir / 'predictions.npz')]
-    if model == 'identity':
-        args += ['--identity_sidecar_path', item['identity']]
+    outdir = Path(resources["evaluation_dir"]) / model_id / dataset / aspect
+    checkpoint = Path(config["base_dir_final"]) / aspect / "best_model.pt"
+    args = [
+        "--ablation",
+        model_id,
+        "--go_aspect",
+        aspect,
+        "--mode",
+        "evaluate",
+        "--no-bootstrap",
+        "--dataset_id",
+        dataset,
+        "--checkpoint",
+        str(checkpoint),
+        "--test_fasta",
+        item["fasta"],
+        "--train_fasta",
+        resources["pdb_train"]["fasta"],
+        "--test_manifest_path",
+        item["manifest"],
+        "--test_esm_shard_dir",
+        item["esm_shards"],
+        "--test_homology_shard_dir",
+        item["homology_shards"].format(aspect=aspect),
+        "--go_vocab_path",
+        resources["go_vocab"].format(aspect=aspect),
+        "--go_annotation_path",
+        item["annotations"],
+        "--train_go_annotation_path",
+        resources["train_annotations"],
+        "--obo_path",
+        resources["obo"],
+        "--outdir",
+        str(outdir),
+        "--prediction_cache_path",
+        str(outdir / "predictions.npz"),
+    ]
+    if model == "identity":
+        args += ["--identity_sidecar_path", item["identity"]]
     return args
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['check', 'prepare', 'enrich', 'verify-priors', 'build-missing-homology', 'search', 'final', 'infer', 'reference', 'compare'])
-    parser.add_argument('--resources', type=Path, default=Path('configs/fusion_baseline_resources.yaml'))
-    parser.add_argument('--model', choices=['fixed', 'identity'])
-    parser.add_argument('--dataset', choices=['pdb_test', 'af_test'])
-    parser.add_argument('--splits', nargs='+', choices=SPLITS, default=list(SPLITS))
-    parser.add_argument('--aspects', nargs='+', choices=ASPECTS, default=list(ASPECTS))
-    parser.add_argument('--output', type=Path)
-    parser.add_argument('--search-dir', type=Path, help='Final only: existing search directory containing BP/MF/CC; validate equivalent resources before reuse.')
-    parser.add_argument('--check-only', action='store_true', help='Final only: validate resource compatibility and candidate selection without training.')
-    parser.add_argument('--diamond', default='./diamond')
-    parser.add_argument('--threads', type=int, default=8)
-    parser.add_argument('--n-resamples', type=int, default=10000)
-    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument(
+        "action",
+        choices=[
+            "check",
+            "prepare",
+            "enrich",
+            "verify-priors",
+            "build-missing-homology",
+            "search",
+            "final",
+            "infer",
+            "reference",
+            "compare",
+        ],
+    )
+    parser.add_argument(
+        "--resources", type=Path, default=Path("configs/fusion_baseline_resources.yaml")
+    )
+    parser.add_argument("--model", choices=["fixed", "identity"])
+    parser.add_argument("--dataset", choices=["pdb_test", "af_test"])
+    parser.add_argument("--splits", nargs="+", choices=SPLITS, default=list(SPLITS))
+    parser.add_argument("--aspects", nargs="+", choices=ASPECTS, default=list(ASPECTS))
+    parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--search-dir",
+        type=Path,
+        help="Final only: existing search directory containing BP/MF/CC; validate equivalent resources before reuse.",
+    )
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="Final only: validate resource compatibility and candidate selection without training.",
+    )
+    parser.add_argument("--diamond", default="./diamond")
+    parser.add_argument("--threads", type=int, default=8)
+    parser.add_argument("--n-resamples", type=int, default=10000)
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(argv)
-    if (args.search_dir is not None or args.check_only) and args.action != 'final':
-        parser.error('--search-dir and --check-only are supported only by final')
+    if (args.search_dir is not None or args.check_only) and args.action != "final":
+        parser.error("--search-dir and --check-only are supported only by final")
     if Path.cwd().resolve() != ROOT:
-        parser.error(f'Run from the repository root: {ROOT}')
+        parser.error(f"Run from the repository root: {ROOT}")
     from reliability_aware.utils.fusion_protocol import load_resources
+
     resources = load_resources(args.resources)
-    if args.action == 'check':
+    if args.action == "check":
         check_resources(resources)
-    elif args.action == 'prepare':
+    elif args.action == "prepare":
         from reliability_aware.utils.fusion_preparation import prepare_identity_split
         from reliability_aware.utils.prediction_cache import sha256_file
+
         failures = []
         for split in args.splits:
             try:
                 report = prepare_identity_split(resources=resources, split=split)
-                print(f"{split}: {report['status']}; {report['remaining_query_count']} proteins")
+                print(f"{split}: {report['status']}; {report['query_count']} proteins")
             except (ValueError, FileNotFoundError) as exc:
-                failures.append(f'{split}: {exc}')
-        root = Path(resources['reference_source_dir'])
-        hashes = {name: sha256_file(root / name) for name in ('predict.py', 'alignment_knn.py') if (root / name).is_file()}
-        Path(resources['prepared_dir'], 'interlabelgo_source.json').write_text(json.dumps(hashes, indent=2))
+                failures.append(f"{split}: {exc}")
+        root = Path(resources["reference_source_dir"])
+        hashes = {
+            name: sha256_file(root / name)
+            for name in ("predict.py", "alignment_knn.py")
+            if (root / name).is_file()
+        }
+        Path(resources["prepared_dir"], "interlabelgo_source.json").write_text(
+            json.dumps(hashes, indent=2)
+        )
         if failures:
-            raise ValueError('\n'.join(failures))
-    elif args.action == 'enrich':
+            raise ValueError("\n".join(failures))
+    elif args.action == "enrich":
         if len(args.splits) != 1:
-            parser.error('enrich requires exactly one --splits value')
+            parser.error("enrich requires exactly one --splits value")
         enrich(resources, args.splits[0], args.output, args.diamond, args.threads)
-    elif args.action == 'verify-priors':
+    elif args.action == "verify-priors":
         from reliability_aware.utils.fusion_preparation import verify_frozen_priors
+
         for split in args.splits:
             for aspect in args.aspects:
                 report = verify_frozen_priors(resources, split, aspect)
-                print(f"{split}/{aspect}: {report['checked_n']} unchanged priors verified")
-    elif args.action == 'build-missing-homology':
+                print(
+                    f"{split}/{aspect}: {report['checked_n']} unchanged priors verified"
+                )
+    elif args.action == "build-missing-homology":
         build_missing_homology(resources, args.splits, args.aspects)
-    elif args.action in ('search', 'final'):
+    elif args.action in ("search", "final"):
         if args.model is None:
-            parser.error('search/final require --model')
+            parser.error("search/final require --model")
         model_id, path, config = configured_model(args.model)
-        if Path(config['resources']).resolve() != args.resources.resolve():
-            raise ValueError('The model YAML resources path must match --resources')
-        require_training_inputs(resources, config, args.aspects, final=args.action == 'final', search_dir=args.search_dir)
-        if args.action == 'search':
-            print(f"Search: {len(args.aspects)} aspects; {config['num_trials']} trials x {config['trial_epochs']} epochs per aspect", flush=True)
+        if Path(config["resources"]).resolve() != args.resources.resolve():
+            raise ValueError("The model YAML resources path must match --resources")
+        require_training_inputs(
+            resources,
+            config,
+            args.aspects,
+            final=args.action == "final",
+            search_dir=args.search_dir,
+        )
+        if args.action == "search":
+            print(
+                f"Search: {len(args.aspects)} aspects; {config['num_trials']} trials x {config['trial_epochs']} epochs per aspect",
+                flush=True,
+            )
         else:
-            source = args.search_dir or config.get('search_results_path') or config['base_dir_search']
-            print(f"Final {'preflight' if args.check_only else 'training'}: {len(args.aspects)} aspects; "
-                  f"up to {config['top_k_params']} candidates from {source}; "
-                  f"{'no training' if args.check_only else str(config['final_epochs']) + ' epochs per candidate'}; no search rerun", flush=True)
+            source = (
+                args.search_dir
+                or config.get("search_results_path")
+                or config["base_dir_search"]
+            )
+            print(
+                f"Final {'preflight' if args.check_only else 'training'}: {len(args.aspects)} aspects; "
+                f"up to {config['top_k_params']} candidates from {source}; "
+                f"{'no training' if args.check_only else str(config['final_epochs']) + ' epochs per candidate'}; no search rerun",
+                flush=True,
+            )
         extra_args = []
         if args.search_dir is not None:
-            extra_args += ['--search-dir', str(args.search_dir)]
+            extra_args += ["--search-dir", str(args.search_dir)]
         if args.check_only:
-            extra_args += ['--check-only']
+            extra_args += ["--check-only"]
         for aspect in args.aspects:
-            subprocess.run([sys.executable, 'scripts/run_model_training.py', '--ablation', model_id,
-                '--go_aspect', aspect, '--hparams', str(path), '--run_type',
-                'randomized_search' if args.action == 'search' else 'full_training', *extra_args], check=True)
-    elif args.action == 'reference':
+            subprocess.run(
+                [
+                    sys.executable,
+                    "scripts/run_model_training.py",
+                    "--ablation",
+                    model_id,
+                    "--go_aspect",
+                    aspect,
+                    "--hparams",
+                    str(path),
+                    "--run_type",
+                    "randomized_search" if args.action == "search" else "full_training",
+                    *extra_args,
+                ],
+                check=True,
+            )
+    elif args.action == "reference":
         if args.dataset is None:
-            parser.error('reference requires --dataset')
+            parser.error("reference requires --dataset")
         manifest_coverage(resources[args.dataset])
         for aspect in args.aspects:
-            checkpoint = resources['reference_checkpoints'][aspect]
-            cache = resources['reference_caches'][args.dataset][aspect]
+            checkpoint = resources["reference_checkpoints"][aspect]
+            cache = resources["reference_caches"][args.dataset][aspect]
             if not checkpoint or not cache:
-                raise ValueError('Configure reference_checkpoints and reference_caches in the resources YAML')
+                raise ValueError(
+                    "Configure reference_checkpoints and reference_caches in the resources YAML"
+                )
             if Path(cache).exists():
-                raise FileExistsError(f'{cache}: use compare to reuse completed caches')
-            argv = inference_args(resources, 'fixed', args.dataset, aspect)
-            for flag, value in [('--ablation', 'sequence_homology_confidence_gate'), ('--checkpoint', checkpoint),
-                                ('--outdir', str(Path(cache).parent)), ('--prediction_cache_path', cache)]:
+                raise FileExistsError(f"{cache}: use compare to reuse completed caches")
+            argv = inference_args(resources, "fixed", args.dataset, aspect)
+            for flag, value in [
+                ("--ablation", "sequence_homology_confidence_gate"),
+                ("--checkpoint", checkpoint),
+                ("--outdir", str(Path(cache).parent)),
+                ("--prediction_cache_path", cache),
+            ]:
                 argv[argv.index(flag) + 1] = str(value)
-            subprocess.run([sys.executable, 'scripts/inference/run_inference_seq_hom.py', *argv], check=True)
-    elif args.action == 'infer':
+            subprocess.run(
+                [sys.executable, "scripts/inference/run_inference_seq_hom.py", *argv],
+                check=True,
+            )
+    elif args.action == "infer":
         if args.model is None or args.dataset is None:
-            parser.error('infer requires --model and --dataset')
+            parser.error("infer requires --model and --dataset")
         manifest_coverage(resources[args.dataset])
         for aspect in args.aspects:
             from reliability_aware.utils.fusion_preparation import verify_frozen_priors
+
             verify_frozen_priors(resources, args.dataset, aspect)
             argv = inference_args(resources, args.model, args.dataset, aspect)
-            cache = Path(argv[argv.index('--prediction_cache_path') + 1])
-            if cache.exists() or cache.with_suffix('.json').exists():
-                raise FileExistsError(f'{cache}: use compare for cache-only reruns; new inputs require a new evaluation_dir')
-            subprocess.run([sys.executable, 'scripts/inference/run_inference_seq_hom.py', *argv], check=True)
+            cache = Path(argv[argv.index("--prediction_cache_path") + 1])
+            if cache.exists() or cache.with_suffix(".json").exists():
+                raise FileExistsError(
+                    f"{cache}: use compare for cache-only reruns; new inputs require a new evaluation_dir"
+                )
+            subprocess.run(
+                [sys.executable, "scripts/inference/run_inference_seq_hom.py", *argv],
+                check=True,
+            )
     else:
         from reliability_aware.utils.fusion_reporting import compare_all
+
         print(compare_all(resources, n_resamples=args.n_resamples, seed=args.seed))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

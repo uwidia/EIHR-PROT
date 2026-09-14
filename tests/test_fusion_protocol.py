@@ -31,14 +31,17 @@ HP = dict(learning_rate=.001, weight_decay=.0001, attn_hidden_dim=4, attn_dropou
           pos_weight_cap=20., lambda_hier=0.)
 
 
+QUERY_A, QUERY_B = sorted(VALIDATION_EXCLUSIONS)
+
+
 def toy_resources(tmp_path):
     fasta = tmp_path / 'val.fasta'
-    fasta.write_text(''.join(f'>{q}\n' + 'A' * 100 + '\n' for q in ['good', '2VAU-A', 'nohit', '5LSQ-A']))
+    fasta.write_text(''.join(f'>{q}\n' + 'A' * 100 + '\n' for q in ['good', QUERY_A, 'nohit', QUERY_B]))
     valid = 'good\ts1\t1e-9\t100\t50\t100\t100\t50\t50'
     other = 'good\ts2\t1e-9\t50\t50\t100\t100\t80\t80'
     original, enriched = tmp_path / 'old.tsv', tmp_path / 'new.tsv'
-    original.write_text(valid + '\n' + other + '\n2VAU-A\tbad\t1e-9\t100\t80\t100\t66\t99\t100\n')
-    enriched.write_text(valid + '\t50\n' + other + '\t80\n2VAU-A\tbad\t1e-9\t100\t80\t100\t66\t99\t100\t99\n5LSQ-A\tbad\t1e-9\t100\t80\t100\t66\t71\t100\t71\n')
+    original.write_text(valid + '\n' + other + f'\n{QUERY_A}\tbad\t1e-9\t100\t80\t100\t66\t99\t100\n')
+    enriched.write_text(valid + '\t50\n' + other + f'\t80\n{QUERY_A}\tbad\t1e-9\t100\t80\t100\t66\t99\t100\t99\n{QUERY_B}\tbad\t1e-9\t100\t80\t100\t66\t71\t100\t71\n')
     return {'prepared_dir': str(tmp_path / 'prepared'), 'validation_exclude_ids': sorted(VALIDATION_EXCLUSIONS),
             'pdb_val': {'fasta': str(fasta), 'original_hits': str(original), 'enriched_hits': str(enriched),
                         'identity': str(tmp_path / 'prepared/identity.json')}}
@@ -50,8 +53,10 @@ def test_exclusion_removes_entire_queries_preserves_sources_and_reuses(tmp_path)
     before = source.read_bytes()
     report = prepare_identity_split(resources=resources, split='pdb_val')
     assert report['status'] == 'matched'
-    assert report['remaining_query_count'] == 2
-    assert len(report['removed_enriched_rows']) == 2
+    assert report['query_count'] == 2
+    assert not any(q in json.dumps(report) for q in VALIDATION_EXCLUSIONS)
+    for artifact in Path(resources['prepared_dir']).iterdir():
+        assert not any(q in artifact.read_text() for q in VALIDATION_EXCLUSIONS)
     sidecar = load_identity_sidecar(resources['pdb_val']['identity'])
     assert set(sidecar) == {'good', 'nohit'}
     assert sidecar['good']['identity_fraction'] == pytest.approx(.6)
@@ -88,7 +93,7 @@ def test_loader_filters_indices_and_aligns_shuffled_records(tmp_path):
     raw = json.loads(identity.read_text()); raw['records'].reverse(); identity.write_text(json.dumps(raw))
     esm, hom = tmp_path / 'esm', tmp_path / 'hom'
     esm.mkdir(); hom.mkdir()
-    labels = ['good', '2VAU-A', 'nohit', '5LSQ-A']
+    labels = ['good', QUERY_A, 'nohit', QUERY_B]
     manifest = tmp_path / 'manifest.csv'
     with manifest.open('w', newline='') as handle:
         writer = csv.writer(handle)

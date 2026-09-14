@@ -9,10 +9,15 @@ from scripts.fusion_baselines import ASPECTS, SPLITS, check_resources, inference
 ROOT = Path(__file__).resolve().parents[1]
 
 
+from reliability_aware.utils.fusion_protocol import VALIDATION_EXCLUSIONS
+
+QUERY_A, QUERY_B = sorted(VALIDATION_EXCLUSIONS)
+
+
 def test_documented_enrichment_and_output_paths_match_configuration(monkeypatch):
     monkeypatch.chdir(ROOT)
     resources = yaml.safe_load(Path('configs/fusion_baseline_resources.yaml').read_text())
-    guide = Path('baseline_reference.md').read_text()
+    guide = Path('README.md').read_text(encoding='utf-8')
     commands = [shlex.split(line) for line in guide.splitlines()
                 if line.startswith('uv run --extra cu128 python scripts/fusion_baselines.py enrich ')]
     assert len(commands) == len(SPLITS)
@@ -32,7 +37,7 @@ def test_documented_enrichment_and_output_paths_match_configuration(monkeypatch)
         assert config['base_dir_final'] + '/{aspect}/best_model.pt' in guide
         for dataset in ('pdb_test', 'af_test'):
             args = inference_args(resources, model, dataset, 'BP')
-            assert args[args.index('--checkpoint') + 1] == config['base_dir_final'] + '/BP/best_model.pt'
+            assert Path(args[args.index('--checkpoint') + 1]) == Path(config['base_dir_final']) / 'BP/best_model.pt'
 
 
 def test_check_reports_missing_prerequisites_instead_of_crashing(tmp_path):
@@ -41,7 +46,7 @@ def test_check_reports_missing_prerequisites_instead_of_crashing(tmp_path):
     resources = {'reference_db': path('db'), 'obo': path('go.obo'),
                  'train_annotations': path('annotations.tsv'), 'reference_source_dir': path('reference'),
                  'go_vocab': path('{aspect}/vocab.json'), 'subject_go_index': path('{aspect}/index.json'),
-                 'prepared_dir': path('prepared'), 'validation_exclude_ids': ['2VAU-A', '5LSQ-A']}
+                 'prepared_dir': path('prepared'), 'validation_exclude_ids': [QUERY_A, QUERY_B]}
     for split in SPLITS:
         resources[split] = {field: path(f'{split}/{field}') for field in
                             ('fasta', 'manifest', 'original_hits', 'enriched_hits', 'identity', 'esm_shards')}

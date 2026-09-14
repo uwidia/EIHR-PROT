@@ -53,9 +53,12 @@ def load_identity_sidecar(path: str | Path) -> dict[str, dict]:
             raise ValueError(f'{path}: query cohort checksum mismatch')
         if sha256_file(Path(raw['audit_path'])) != raw.get('audit_sha256'):
             raise ValueError(f'{path}: per-hit audit checksum mismatch')
-        if set(result) & set(raw['excluded_query_ids']):
-            raise ValueError(f'{path}: excluded validation IDs remain in sidecar')
-        if raw['excluded_query_ids'] != report['excluded_query_ids'] or raw['retention'] != report['retention']:
+        from reliability_aware.utils.fusion_protocol import VALIDATION_EXCLUSIONS, policy_fingerprint
+        excluded = VALIDATION_EXCLUSIONS if raw.get('dataset_split') == 'pdb_val' else set()
+        if set(result) & excluded:
+            raise ValueError(f'{path}: sidecar query cohort mismatch')
+        if (policy_fingerprint(raw) != canonical_ids_hash(sorted(excluded))
+                or policy_fingerprint(raw) != policy_fingerprint(report) or raw['retention'] != report['retention']):
             raise ValueError(f'{path}: sidecar/evidence policy mismatch')
         if raw['exclude_self_hits'] != raw['retention']['exclude_self_hits']:
             raise ValueError(f'{path}: inconsistent self-hit policy')

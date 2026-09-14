@@ -14,9 +14,9 @@ class DiamondHitValidationTests(unittest.TestCase):
 
     def test_corrupt_subject_length_reports_source_row(self):
         with self.assertRaises(ValueError) as caught:
-            self.parse("\n2VAU-A\t1XX8-A\t1.25e-33\t125\t98.2\t331\t66\t354\t28.0\t99\n")
+            self.parse("\nquery_a\t1XX8-A\t1.25e-33\t125\t98.2\t331\t66\t354\t28.0\t99\n")
         message = str(caught.exception)
-        for detail in ("hits.tsv: line 2", "2VAU-A/1XX8-A", "qlen=331", "slen=66", "nident=99", "--iterate"):
+        for detail in ("hits.tsv: line 2", "query_a/1XX8-A", "qlen=331", "slen=66", "nident=99", "--iterate"):
             self.assertIn(detail, message)
 
     def test_exact_count_boundaries_and_legacy_rows(self):

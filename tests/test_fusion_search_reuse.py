@@ -11,6 +11,11 @@ from reliability_aware.utils.fusion_search_reuse import prepare_final_candidates
 from scripts import fusion_baselines
 
 
+from reliability_aware.utils.fusion_protocol import VALIDATION_EXCLUSIONS
+
+QUERY_A, QUERY_B = sorted(VALIDATION_EXCLUSIONS)
+
+
 @pytest.fixture
 def handoff(tmp_path):
     fasta = tmp_path / 'train.fasta'
@@ -34,7 +39,7 @@ def handoff(tmp_path):
     metadata = {'fusion_protocol_version': 'validation_exclude_two_v1',
                 'model_type': 'sequence_homology_identity_fusion', 'go_aspect': 'BP',
                 'go_terms': ['g1'], 'train_ids_sha256': 'cohort', 'seed': 42,
-                'validation_exclude_ids': ['2VAU-A', '5LSQ-A'],
+                'validation_exclude_ids': [QUERY_A, QUERY_B],
                 'configuration': {'seed': 42, 'final_epochs': 110, 'top_k_params': 1,
                                   'base_dir_search': 'old/search', 'base_dir_final': 'old/final',
                                   'train_identity_sidecar_path': old['pdb_train']['identity']},

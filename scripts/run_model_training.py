@@ -136,7 +136,7 @@ def main():
 
     from reliability_aware.utils.fusion_protocol import (
         BASELINES, load_resources, validation_keep_ids, protocol_metadata,
-        bind_run_directory, selected_candidates,
+        bind_run_directory, selected_candidates, policy_fingerprint,
     )
     is_fusion = ablation in BASELINES
     resources = load_resources(hparams['resources']) if is_fusion else None
@@ -180,8 +180,9 @@ def main():
                 load_identity_sidecar(path)
                 payload = json.loads(Path(path).read_text())
                 expected_excluded = sorted(resources['validation_exclude_ids']) if split == 'pdb_val' else []
-                if payload.get('dataset_split') != split or payload.get('excluded_query_ids') != expected_excluded or payload.get('exclude_self_hits') != (split == 'pdb_train'):
-                    raise ValueError(f'Identity sidecar split/exclusion/self-hit policy mismatch: {path}')
+                from reliability_aware.utils.prediction_cache import canonical_ids_hash
+                if payload.get('dataset_split') != split or policy_fingerprint(payload) != canonical_ids_hash(expected_excluded) or payload.get('exclude_self_hits') != (split == 'pdb_train'):
+                    raise ValueError(f'Identity sidecar split/cohort/self-hit policy mismatch: {path}')
         metadata = protocol_metadata(ablation=ablation, aspect=go_aspect, go_terms=go_data.go_terms,
                                      resources=resources, hparams=hparams,
                                      train_ids=go_data.train_keep_ids, val_ids=go_data.val_keep_ids)
@@ -203,8 +204,7 @@ def main():
                 return
         bind_run_directory(Path(hparams['base_dir_search' if run_type == 'randomized_search' else 'base_dir_final']) / go_aspect, metadata)
         baseline_options = {'seed': int(hparams.get('seed', 42)), 'checkpoint_extra': metadata}
-        logger.info('Fusion validation excludes %s; %d eligible proteins remain for %s',
-                    resources['validation_exclude_ids'], len(go_data.val_keep_ids), go_aspect)
+        logger.info('Fusion validation: %d eligible proteins for %s', len(go_data.val_keep_ids), go_aspect)
 
     run_parameters = {
         "sequence_only": {

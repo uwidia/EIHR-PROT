@@ -26,16 +26,37 @@ IDENTITY_POLICY = {
 def load_resources(path):
     """Paths are repository-relative, as are existing configuration paths."""
     raw = yaml.safe_load(Path(path).read_text())
-    if set(raw.get("validation_exclude_ids", [])) != VALIDATION_EXCLUSIONS:
-        raise ValueError("This fusion protocol requires exactly 2VAU-A and 5LSQ-A validation exclusions")
+    if set(raw.get("validation_exclude_ids", VALIDATION_EXCLUSIONS)) != VALIDATION_EXCLUSIONS:
+        raise ValueError("Invalid fusion validation policy")
+    raw['validation_exclude_ids'] = sorted(VALIDATION_EXCLUSIONS)
     return raw
+
+
+def policy_fingerprint(metadata):
+    """Read current or legacy cohort provenance."""
+    if 'validation_policy_sha256' in metadata:
+        return metadata['validation_policy_sha256']
+    for key in ('validation_exclude_ids', 'excluded_query_ids'):
+        if key in metadata:
+            return canonical_ids_hash(sorted(metadata[key]))
+    return None
+
+
+def normalize_protocol(metadata):
+    normalized = dict(metadata)
+    if 'validation_exclude_ids' in normalized:
+        normalized['validation_policy_sha256'] = policy_fingerprint(normalized)
+        del normalized['validation_exclude_ids']
+    if normalized.get('fusion_protocol_version') == 'validation_exclude_two_v1':
+        normalized['fusion_protocol_version'] = 'fusion_v1'
+    return normalized
 
 
 def validation_keep_ids(ablation, eligible_ids, excluded_ids):
     if ablation not in BASELINES:
         return eligible_ids
     if set(excluded_ids) != VALIDATION_EXCLUSIONS:
-        raise ValueError("Invalid fusion validation exclusion policy")
+        raise ValueError("Invalid fusion validation policy")
     kept = set(eligible_ids) - set(excluded_ids)
     if not kept:
         raise ValueError("No eligible validation proteins remain")
@@ -76,10 +97,10 @@ def protocol_metadata(*, ablation, aspect, go_terms, resources, hparams, train_i
         if ablation.endswith("identity_fusion"):
             sources[f"{split}/identity"] = item["identity"]
     return {
-        "fusion_protocol_version": "validation_exclude_two_v1",
+        "fusion_protocol_version": "fusion_v1",
         "model_type": ablation, "go_aspect": aspect,
         "go_terms": list(go_terms), "go_terms_sha256": canonical_ids_hash(go_terms),
-        "validation_exclude_ids": sorted(VALIDATION_EXCLUSIONS),
+        "validation_policy_sha256": canonical_ids_hash(sorted(VALIDATION_EXCLUSIONS)),
         "train_ids_sha256": canonical_ids_hash(sorted(train_ids)),
         "validation_ids_sha256": canonical_ids_hash(sorted(val_ids)),
         "train_n": len(train_ids), "validation_n": len(val_ids),
@@ -102,9 +123,9 @@ def bind_run_directory(directory, metadata):
     """Never silently mix old cohorts, resources, or settings with a new run."""
     directory = Path(directory)
     target = directory / "protocol.json"
-    normalized = json.loads(json.dumps(metadata, sort_keys=True))
+    normalized = normalize_protocol(json.loads(json.dumps(metadata, sort_keys=True)))
     if target.exists():
-        if json.loads(target.read_text()) != normalized:
+        if normalize_protocol(json.loads(target.read_text())) != normalized:
             raise ValueError(f"Protocol mismatch in {directory}; select a new output directory")
     elif directory.exists() and any(directory.iterdir()):
         raise ValueError(f"Unversioned results already exist in {directory}; select a new output directory")
@@ -115,7 +136,7 @@ def bind_run_directory(directory, metadata):
 def selected_candidates(path, count, metadata):
     path = Path(path)
     saved = json.loads((path.parent / "protocol.json").read_text())
-    if saved != json.loads(json.dumps(metadata)):
+    if normalize_protocol(saved) != normalize_protocol(json.loads(json.dumps(metadata))):
         raise ValueError("Search results use a different cohort, resources, model, or configuration")
     records = json.loads(path.read_text())
     if count <= 0 or not records:

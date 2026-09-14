@@ -43,10 +43,10 @@ def _write_prediction_cache_if_requested(*, args: argparse.Namespace, checkpoint
                                          "model_mode": "eval; gradients disabled"}},
     )
     if args.ablation in {'sequence_homology_fixed_fusion', 'sequence_homology_identity_fusion'}:
-        from reliability_aware.utils.fusion_protocol import resource_fingerprint
+        from reliability_aware.utils.fusion_protocol import resource_fingerprint, policy_fingerprint
         cache.metadata.update({'fusion_parameters': checkpoint['fusion_parameters'],
                                'fusion_protocol_version': checkpoint['fusion_protocol_version'],
-                               'validation_exclude_ids': checkpoint['validation_exclude_ids'],
+                               'validation_policy_sha256': policy_fingerprint(checkpoint),
                                'policy': checkpoint['adaptation'],
                                'input_shards': {k: resource_fingerprint(p) for k, p in
                                    [('esm', args.test_esm_shard_dir), ('homology', args.test_homology_shard_dir)]}})
