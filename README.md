@@ -365,13 +365,13 @@ diamond_db/{BP,MF,CC}/
 
 The GO vocabulary is built from training annotations only. Training homology priors exclude self-hits, while validation and test priors search only against the training database.
 
-**Original homology, identity fusion, and fixed fusion use separate preparation paths:**
+**The Full EIHR-PROT, Sequence-conditioned Ablation, Sequence-only variant, identity fusion, and fixed fusion use separate preparation paths:**
 
 | Workflow | Commands | Inputs and outputs |
-| --- | --- | --- | --- |
-| `Full EIHR-PROT`, `Sequence-conditioned Ablation`, and `Sequence-only variant` | `prepare_diamond_hits.py`, then `build_homology_shards.py` | Nine-column `diamond_db/*_hits.tsv` → `diamond_db/{BP,MF,CC}/*_homology_shards/` | 
+| --- | --- | --- |
+| `Full EIHR-PROT`, `Sequence-conditioned Ablation`, and `Sequence-only variant` | `prepare_diamond_hits.py`, then `build_homology_shards.py` | Nine-column `diamond_db/*_hits.tsv` → `diamond_db/{BP,MF,CC}/*_homology_shards/` |
 | Identity fusion | `fusion_baselines.py enrich` (only if enriched hits are missing), then `fusion_baselines.py prepare` | Exact-count hits configured under `runs/fusion_resources/enrichment/` → filtered evidence and identity sidecars under `runs/fusion_resources/validation_exclude_two_v2/` |
-| Fixed fusion | `fusion_baselines.py prepare` (plus optional `enrich` if enriched hits are missing) | Reuse original homology shards, then validate and write reduced identity resources in `runs/fusion_resources/validation_exclude_two_v2/` | 
+| Fixed fusion | `fusion_baselines.py prepare` (plus optional `enrich` if enriched hits are missing) | Reuse original homology shards, then validate and write reduced identity resources in `runs/fusion_resources/validation_exclude_two_v2/` |
 
 `build_homology_shards.py` converts existing hits into priors; it does not run a DIAMOND search. Its bitscore×coverage priors do not use `nident`. It also accepts existing ten-column hit files, ignoring the tenth column without dropping proteins or changing retention. An invalid identity count such as `nident=99, slen=66` therefore does not block original shard building. You can rerun the failed commands directly:
 
