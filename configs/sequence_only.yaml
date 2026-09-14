@@ -3,7 +3,7 @@ num_trials: 20
 trial_epochs: 8
 top_k_params: 5
 patience: 10
-final_epochs: 150
+final_epochs: 120
 
 
 base_dir_search: runs/sequence_only/search
@@ -44,7 +44,7 @@ promising_hparams:
     attn_dropout: 0.1
     head_hidden_dim: 512
     head_dropout: 0.2
-    lambda_hier: 0.01
+    lambda_hier: 0.0
     pos_weight_cap: 10.0
 
   CC:

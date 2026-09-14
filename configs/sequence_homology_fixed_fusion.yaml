@@ -1,5 +1,4 @@
 # Fresh attention/head per candidate; fixed ESM inputs and EIHR homology priors.
-# Both baselines exclude 2VAU-A and 5LSQ-A only from PDB validation.
 # One scalar z starts at 0; alpha_h=sigmoid(z).
 # Scalar AdamW group: gate LR multiplier, weight_decay=0; no-hit keeps global fusion.
 batch_size: 16
@@ -9,9 +8,9 @@ num_trials: 20
 trial_epochs: 8
 top_k_params: 5
 patience: 10
-final_epochs: 150
-base_dir_search: runs/sequence_homology_fixed_fusion/validation_exclude_two_v2/search
-base_dir_final: runs/sequence_homology_fixed_fusion/validation_exclude_two_v2/final
+final_epochs: 120
+base_dir_search: runs/sequence_homology_fixed_fusion/cohort_v2/search
+base_dir_final: runs/sequence_homology_fixed_fusion/cohort_v2/final
 use_search_results: true
 search_results_path: null
 search_space:
@@ -24,3 +23,41 @@ search_space:
   head_dropout: [0.0, 0.1, 0.2, 0.3]
   lambda_hier: [0.0, 0.001, 0.01]
   pos_weight_cap: [5.0, 10.0, 20.0]
+
+
+promising_hparams:
+  BP:
+    learning_rate: 0.001
+    gate_lr_multiplier: 0.05
+    weight_decay: 0.00001
+    attn_hidden_dim: 512
+    attn_dropout: 0.2
+    head_hidden_dim: 512
+    head_dropout: 0.1
+    lambda_hier: 0.0
+    pos_weight_cap: 20.0
+    training_seed: 10042
+
+  MF:
+    learning_rate: 0.001
+    gate_lr_multiplier: 0.1
+    weight_decay: 0.00001
+    attn_hidden_dim: 128
+    attn_dropout: 0.3
+    head_hidden_dim: 512
+    head_dropout: 0.2
+    lambda_hier: 0.0
+    pos_weight_cap: 5.0
+    training_seed: 10042
+
+  CC:
+    learning_rate: 0.001
+    gate_lr_multiplier: 0.2
+    weight_decay: 0.0001
+    attn_hidden_dim: 512
+    attn_dropout: 0.1
+    head_hidden_dim: 512
+    head_dropout: 0.0
+    lambda_hier: 0.01
+    pos_weight_cap: 5.0
+    training_seed: 10042

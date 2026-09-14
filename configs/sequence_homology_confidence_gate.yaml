@@ -5,7 +5,7 @@ top_k_params: 5
 patience: 10
 base_dir_search: runs/sequence_homology_confidence_gate/search
 
-final_epochs: 150
+final_epochs: 120
 base_dir_final: runs/sequence_homology_confidence_gate/final
 
 use_wandb: False
