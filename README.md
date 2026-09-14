@@ -439,7 +439,7 @@ Replace `--search-dir` with your existing search directory. Reuse checks that mo
 | Model | Ablation argument | Configuration |
 | --- | --- | --- |
 | EIHR-PROT confidence gate | `sequence_homology_confidence_gate` | `configs/sequence_homology_confidence_gate.yaml` |
-| Internal learned gate | `sequence_homology_internal_gate` | `configs/sequence_homology_internal_gate.yaml` |
+| Sequence-conditioned gate | `sequence_homology_internal_gate` | `configs/sequence_homology_internal_gate.yaml` |
 | Sequence-only baseline | `sequence_only` | `configs/sequence_only.yaml` |
 | Homology-only baseline | `homology_only` | `configs/homology_only.yaml` |
 | Identity fusion baseline | `identity` | `configs/sequence_homology_identity_fusion.yaml` |
