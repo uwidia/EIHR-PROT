@@ -8,7 +8,7 @@ EIHR-PROT also adds an added layer of interpretability by displaying how much ea
 
 The web version of this model is available [here](https://protein-function-predictor-ten.vercel.app/)
 
-![Model Architecture](images/Emmanuel's%20First%20Illustration%20(2)-images-0.jpg)
+![Model Architecture](images/Emmanuel's%20First%20Illustration%20(2)-images-0.png)
 
 ---
 
@@ -91,8 +91,8 @@ uv run --extra cu128 python -c "import torch; print(torch.__version__); print(to
 Run every project Python command through `uv run` with the same selected extra, for example
 `uv run --extra cpu python scripts/get_embeddings.py --help`. This selects the project
 interpreter and dependencies without activating `.venv`; a bare `python` command may
-use your system interpreter instead. The [fusion baseline guide](baseline_reference.md)
-uses the same approach.
+use your system interpreter instead. The same `uv run --extra ...` pattern is used
+throughout the Training and Reproducibility section below.
 
 ### 6. DIAMOND Installation
 To run DIAMOND and obtain homology priors, [download the compatible DIAMONDv2.1.24 release](https://github.com/bbuchfink/diamond/releases) for your operating system.
@@ -365,12 +365,13 @@ diamond_db/{BP,MF,CC}/
 
 The GO vocabulary is built from training annotations only. Training homology priors exclude self-hits, while validation and test priors search only against the training database.
 
-**Original homology and identity fusion use separate preparation paths:**
+**Original homology, identity fusion, and fixed fusion use separate preparation paths:**
 
 | Workflow | Commands | Inputs and outputs | Validation proteins |
 | --- | --- | --- | --- |
 | Original homology | `prepare_diamond_hits.py`, then `build_homology_shards.py` | Nine-column `diamond_db/*_hits.tsv` → `diamond_db/{BP,MF,CC}/*_homology_shards/` | Keep all proteins, including `2VAU-A` and `5LSQ-A` |
 | Identity fusion | `fusion_baselines.py enrich` (only if enriched hits are missing), then `fusion_baselines.py prepare` | Exact-count hits configured under `runs/fusion_resources/enrichment/` → filtered evidence and identity sidecars under `runs/fusion_resources/validation_exclude_two_v2/` | Exclude whole queries `2VAU-A` and `5LSQ-A` before identity validation |
+| Fixed fusion | `fusion_baselines.py prepare` (plus optional `enrich` if enriched hits are missing) | Reuse original homology shards, then validate and write reduced identity resources in `runs/fusion_resources/validation_exclude_two_v2/` | Same reduced validation cohort as identity fusion |
 
 `build_homology_shards.py` converts existing hits into priors; it does not run a DIAMOND search. Its bitscore×coverage priors do not use `nident`. It also accepts existing ten-column hit files, ignoring the tenth column without dropping proteins or changing retention. An invalid identity count such as `nident=99, slen=66` therefore does not block original shard building. You can rerun the failed commands directly:
 
@@ -392,18 +393,46 @@ EXTRA=cu128 # Change to cpu for CPU-only
 uv run --extra "$EXTRA" python scripts/fusion_baselines.py prepare
 ```
 
-This validates the remaining exact counts and checks retained evidence against the original hits. The fusion models reuse original homology shards with the reduced validation loader; baseline-local reconstruction also excludes these queries' evidence while preserving manifest indices. The same reduced validation cohort applies to the new fixed-fusion comparison baseline. See [the fusion preparation guide](baseline_reference.md#2-validate-evidence-and-build-identity-resources) for explicit enrichment and optional `build-missing-homology` commands. Do not use the standalone `build_identity_sidecar.py` on raw validation hits: the protocol-aware `prepare` command performs the required exclusions and evidence audit.
+This validates the remaining exact counts and checks retained evidence against the original hits. The fusion models reuse original homology shards with the reduced validation loader; baseline-local reconstruction also excludes these queries' evidence while preserving manifest indices. Do not use the standalone `build_identity_sidecar.py` on raw validation hits: the protocol-aware `prepare` command performs the required exclusions and evidence audit.
 
-For the fixed- and identity-fusion baselines, follow [the step-by-step baseline guide](baseline_reference.md). If identity search is already complete in an earlier directory, validate and reuse it for final training without rerunning search:
+For the identity and fixed fusion baselines, the concise run order is:
 
 ```bash
 EXTRA=cu128 # Change to cpu for CPU-only
 
-uv run --extra "$EXTRA" python scripts/fusion_baselines.py final --model identity --search-dir runs/sequence_homology_identity_fusion/validation_exclude_two_v1/search --check-only
-uv run --extra "$EXTRA" python scripts/fusion_baselines.py final --model identity --search-dir runs/sequence_homology_identity_fusion/validation_exclude_two_v1/search
+# Optional: build missing enriched validation hits once
+uv run --extra "$EXTRA" python scripts/fusion_baselines.py enrich --splits pdb_val --output runs/fusion_resources/enrichment/pdb_val_hits.tsv
+
+# Prepare the reduced validation identity resources
+uv run --extra "$EXTRA" python scripts/fusion_baselines.py prepare
+
+# Identity fusion baseline
+uv run --extra "$EXTRA" python scripts/fusion_baselines.py search --model identity
+uv run --extra "$EXTRA" python scripts/fusion_baselines.py final --model identity
+
+# Fixed fusion baseline
+uv run --extra "$EXTRA" python scripts/fusion_baselines.py search --model fixed
+uv run --extra "$EXTRA" python scripts/fusion_baselines.py final --model fixed
 ```
 
-Replace `--search-dir` with your existing search directory. Reuse checks that model inputs and settings still match; the guide explains prerequisites and output paths.
+If a fusion run needs missing homology shards in a fresh output tree, run `build-missing-homology` once before `search`/`final` and keep the original `diamond_db` untouched:
+
+```bash
+EXTRA=cu128 # Change to cpu for CPU-only
+
+uv run --extra "$EXTRA" python scripts/fusion_baselines.py build-missing-homology --splits pdb_train pdb_val pdb_test af_test --aspects BP MF CC
+```
+
+If identity search is already complete in an earlier directory, validate and reuse it for final training without rerunning search:
+
+```bash
+EXTRA=cu128 # Change to cpu for CPU-only
+
+uv run --extra "$EXTRA" python scripts/fusion_baselines.py final --model identity --search-dir runs/sequence_homology_identity_fusion/cohort_v2/search --check-only
+uv run --extra "$EXTRA" python scripts/fusion_baselines.py final --model identity --search-dir runs/sequence_homology_identity_fusion/cohort_v2/search
+```
+
+Replace `--search-dir` with your existing search directory. Reuse checks that model inputs and settings still match.
 
 ### 2. Choose a model configuration
 
@@ -413,6 +442,8 @@ Replace `--search-dir` with your existing search directory. Reuse checks that mo
 | Internal learned gate | `sequence_homology_internal_gate` | `configs/sequence_homology_internal_gate.yaml` |
 | Sequence-only baseline | `sequence_only` | `configs/sequence_only.yaml` |
 | Homology-only baseline | `homology_only` | `configs/homology_only.yaml` |
+| Identity fusion baseline | `identity` | `configs/sequence_homology_identity_fusion.yaml` |
+| Fixed fusion baseline | `fixed` | `configs/sequence_homology_fixed_fusion.yaml` |
 
 The YAML files (in the **configs** directory) contain the search spaces, selected hyperparameters, epoch
 limits, patience values, output directories, and W&B settings used by the training entry point.
