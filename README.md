@@ -367,11 +367,11 @@ The GO vocabulary is built from training annotations only. Training homology pri
 
 **The Full EIHR-PROT, Sequence-conditioned Ablation, Sequence-only variant, identity fusion, and fixed fusion use separate preparation paths:**
 
-| Workflow | Commands | Inputs and outputs |
-| --- | --- | --- |
-| `Full EIHR-PROT`, `Sequence-conditioned Ablation`, and `Sequence-only variant` | `prepare_diamond_hits.py`, then `build_homology_shards.py` | Nine-column `diamond_db/*_hits.tsv` → `diamond_db/{BP,MF,CC}/*_homology_shards/` |
-| Identity fusion | `fusion_baselines.py enrich` (only if enriched hits are missing), then `fusion_baselines.py prepare` | Exact-count hits configured under `runs/fusion_resources/enrichment/` → filtered evidence and identity sidecars under `runs/fusion_resources/validation_exclude_two_v2/` |
-| Fixed fusion | `fusion_baselines.py prepare` (plus optional `enrich` if enriched hits are missing) | Reuse original homology shards, then validate and write reduced identity resources in `runs/fusion_resources/validation_exclude_two_v2/` |
+| Workflow | Commands |
+| --- | --- |
+| `Full EIHR-PROT`, `Sequence-conditioned Ablation`, and `Sequence-only variant` | `prepare_diamond_hits.py`, then `build_homology_shards.py` |
+| Identity fusion | `fusion_baselines.py enrich` (only if enriched hits are missing), then `fusion_baselines.py prepare` |
+| Fixed fusion | `fusion_baselines.py prepare` (plus optional `enrich` if enriched hits are missing) |
 
 `build_homology_shards.py` converts existing hits into priors; it does not run a DIAMOND search. Its bitscore×coverage priors do not use `nident`. It also accepts existing ten-column hit files, ignoring the tenth column without dropping proteins or changing retention. An invalid identity count such as `nident=99, slen=66` therefore does not block original shard building. You can rerun the failed commands directly:
 
@@ -482,74 +482,6 @@ done
 
 To search another trainable model, replace both `--ablation` and `--hparams` with the corresponding pair from the table above. Search results are written under the config's `base_dir_search` directory.
 
-### Retrain the confidence gate with signal ablations
-
-Use the launcher below to freeze the selected `promising_hparams` from
-`configs/sequence_homology_confidence_gate.yaml` and retrain five variants: the full
-gate, without max bitscore, without maximum query coverage, without
-`log1p(retained_hit_count)`, and without hit availability. It uses the existing
-training/validation data and homology priors, with no new hyperparameter search.
-Each ablated gate selects three columns **before** `LayerNorm(3)` and its first
-linear layer; the full model retains `LayerNorm(4)`.
-
-```bash
-uv run --extra cu128 python scripts/run_confidence_gate_ablations.py --seed 42 --output-dir runs/confidence_gate_signal_ablations/seed42 --train
-```
-
-This command also works in PowerShell. Use `--extra cpu` for CPU training.
-The default is all three aspects (15 training jobs); use `--aspects BP` for just
-BP. Omit `--train` to prepare configs and print the individual training commands
-without starting training. Run those printed commands from the repository root
-when ready. The output directory must be new, so earlier checkpoints are protected.
-Use another directory for a repeat experiment.
-
-`--seed random` draws **one** seed for the entire suite and records it as both
-`initialization_seed` and `training_seed` in `suite.json`, generated YAMLs, and
-checkpoint `hparams`. A fixed seed initializes the sequence branch and prediction
-head identically across variants. The gate input layer has a different shape in
-the ablations and uses its normal initialization; the final gate layer still
-starts at balanced 50/50 fusion.
-
-The suite also seeds Python, NumPy, PyTorch CPU/CUDA, epoch batch ordering, and
-loader workers. It resets training RNGs after model construction and logging
-setup, immediately before the first epoch. Train and validation loaders have
-separate generators, so creating their iterators does not advance dropout's RNG.
-The current loaders use zero workers; worker seeding is also configured for
-loaders with workers and persistent workers are disallowed for these runs.
-
-Each training command automatically restarts its process when necessary to apply
-`PYTHONHASHSEED`, deterministic cuBLAS configuration, and fixed CPU thread counts
-before importing numerical libraries. PyTorch deterministic algorithms are strict,
-cuDNN benchmarking and TF32 are disabled. CPU intra/inter-op threads default to
-up to eight available CPUs; use `--cpu-threads 4` (or another positive count) to
-choose the shared count. It also controls the OpenMP/MKL/OpenBLAS/NumExpr thread
-limits. The resolved count is frozen in every generated config and `suite.json`,
-so individual commands use the same count as the full suite. These settings may
-affect speed; unsupported nondeterministic operations
-raise an error. Checkpoint `hparams.reproducibility` records the settings and
-Python/NumPy/PyTorch/CUDA/cuDNN versions and GPU names. Results may still differ
-across hardware or software versions, and different variants are expected to
-learn different weights even with matched randomness.
-
-These controls apply to newly prepared suites, including their individually
-printed training commands. If you previously prepared configs without training,
-generate a new suite in a fresh output directory to include the training controls.
-
-Outputs live at `<output-dir>/<variant>/final/<aspect>/best_model.pt`.
-Existing README inference commands and original checkpoint paths are unchanged.
-To infer with a new variant, pass its checkpoint to
-`scripts/inference/run_inference_seq_hom.py` using `--checkpoint`; its saved
-`omitted_gate_feature` reconstructs the correct gate automatically.
-
-For individual confidence-gate runs, set `initialization_seed: 42` (or `random`)
-and `omitted_gate_feature` inside the aspect's `promising_hparams` mapping.
-Allowed omissions are `b_max`, `cov_max`, `log1p_n_hits`, and `has_hit`; null means
-the full gate. Missing/null initialization seeds preserve the original random
-initialization behavior. To opt an individual fixed-parameter confidence-gate run
-into the same training controls, also set `training_seed: 42` and
-`reproducible_training: true` inside its aspect's `promising_hparams` mapping.
-Optionally set `cpu_threads: 4` there to select a specific CPU thread count.
-Choose a separate `base_dir_final` for these runs.
 
 ### 4. Train the selected configuration
 
